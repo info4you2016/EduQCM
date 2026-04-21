@@ -1,0 +1,5 @@
+{
+  "name": "EduQCM - Gestion d'Examens",
+  "description": "Une plateforme complète pour la gestion d'examens QCM, l'analyse des résultats et la communication entre enseignants et étudiants.",
+  "requestFramePermissions": []
+}
