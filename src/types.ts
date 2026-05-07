@@ -12,9 +12,14 @@ export interface UserProfile {
   createdAt: string;
 }
 
+export type FiliereLevel = 'spécialisation' | 'qualification' | 'technicien' | 'technicien spécialisé';
+
 export interface Filiere {
   id: number;
+  code: string;
   name: string;
+  description: string;
+  niveau?: FiliereLevel;
   createdAt: string;
 }
 
@@ -26,9 +31,11 @@ export interface Group {
   studentCount?: number;
 }
 
-export interface Course {
+export interface Module {
   id: number;
+  code: string;
   name: string;
+  durationHours: number;
   description: string;
   teacherId: number;
   filiereId?: number;
@@ -54,16 +61,21 @@ export interface Question {
   correctAnswers?: string[];
   correctOrder?: number[];
   correctMatches?: number[];
+  columnAHeader?: string;
+  columnBHeader?: string;
   points: number;
   shuffleOptions?: boolean;
 }
+
+export type ExamType = 'controle-continu' | 'fin-de-module';
 
 export interface Exam {
   id: number;
   title: string;
   description: string;
-  courseId: number;
+  moduleId: number;
   teacherId: number;
+  type: ExamType;
   questions: Question[];
   durationMinutes: number;
   shuffleQuestions?: boolean;
@@ -96,5 +108,36 @@ export interface Notification {
   title: string;
   content: string;
   teacherId: number;
+  groupId?: number;
+  type?: 'announcement' | 'exam';
+  read?: boolean;
   createdAt: string;
+}
+
+export interface HeaderLine {
+  id: string;
+  text: string;
+  fontSize: number;
+  isBold: boolean;
+  isItalic: boolean;
+  alignment: 'left' | 'center' | 'right';
+  fontFamily?: string;
+}
+
+export interface OrganizationSettings {
+  id?: number;
+  orgName: string;
+  orgNameArabic: string;
+  orgNameFrench: string;
+  regionalDirection: string;
+  institutionName: string;
+  orgSubName: string;
+  orgLogoUrl?: string;
+  regionName: string;
+  academicYear: string;
+  orgLogoBgColor: string;
+  orgLogoTextColor: string;
+  showHeaderLines?: boolean;
+  headerLines?: HeaderLine[];
+  updatedAt?: string;
 }

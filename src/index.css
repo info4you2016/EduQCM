@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Outfit:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Outfit:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&family=Amiri:wght@400;700&display=swap');
 @import "tailwindcss";
 @import "react-quill-new/dist/quill.snow.css";
 @import "react-quill-new/dist/quill.bubble.css";
@@ -87,15 +87,28 @@
 
 /* Custom scrollbar for a cleaner look */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 10px;
+  height: 10px;
 }
 
 ::-webkit-scrollbar-track {
-  @apply bg-transparent;
+  @apply bg-slate-50/50 rounded-full;
 }
 
 ::-webkit-scrollbar-thumb {
-  @apply bg-slate-200 rounded-full hover:bg-slate-300 transition-colors;
+  @apply bg-slate-300 rounded-full border-2 border-transparent bg-clip-padding hover:bg-slate-400 transition-colors;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  @apply bg-slate-100/50 rounded-full;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  @apply bg-indigo-200/80 rounded-full hover:bg-indigo-300 border-2 border-transparent bg-clip-padding;
 }
 
