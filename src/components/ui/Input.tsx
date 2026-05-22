@@ -3,7 +3,7 @@ import { cn } from '../../lib/utils';
 import { LucideIcon } from 'lucide-react';
 
 interface InputProps {
-  label: string;
+  label?: string;
   value: string;
   onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   type?: string;
@@ -26,7 +26,7 @@ export const Input = ({
   ...props
 }: InputProps) => (
   <div className={cn("space-y-1.5", className)}>
-    <label className="text-xs font-black uppercase tracking-widest text-slate-400 px-1">{label}</label>
+    {label && <label className="text-xs font-black uppercase tracking-widest text-slate-400 px-1">{label}</label>}
     <div className="relative">
       {Icon && <Icon className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-300" />}
       <input

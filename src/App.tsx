@@ -30,12 +30,22 @@ import { ProfileModal } from './components/modals/ProfileModal';
 import { NotificationsDropdown } from './components/NotificationsDropdown';
 import { Modal } from './components/ui/Modal';
 import { AddNotificationForm } from './components/forms/AddNotificationForm';
+import { Toaster } from 'react-hot-toast';
+import { useAppStore } from './store/useAppStore';
 
 export default function App() {
-  const [user, setUser] = useState<UserProfile | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<'dashboard' | 'exam'>('dashboard');
-  const [activeExam, setActiveExam] = useState<Exam | null>(null);
+  const {
+    user,
+    setUser,
+    view,
+    setView,
+    activeExam,
+    setActiveExam,
+    checkAuth,
+    logout,
+    loadingAuth
+  } = useAppStore();
+
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [isAddingNotification, setIsAddingNotification] = useState(false);
   const [activeTeacherTab, setActiveTeacherTab] = useState<string>('overview');
@@ -53,13 +63,26 @@ export default function App() {
   const fetchData = useCallback(async () => {
     if (!user) return;
     try {
+      // Use individual try-catch for each data fetch to avoid blocking everything if one fails
+      const fetchWithTimeout = async <T extends any>(promise: Promise<T>, fallback: T): Promise<T> => {
+        try {
+          const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Timeout')), 5000)
+          );
+          return await Promise.race([promise, timeoutPromise]) as T;
+        } catch (err) {
+          console.warn('Individual fetch failed:', err);
+          return fallback;
+        }
+      };
+
       const [modulesData, examsData, resultsData, notificationsData, filieresData, groupsData] = await Promise.all([
-        api.modules.list(),
-        api.exams.list(),
-        api.results.list(),
-        api.notifications.list(),
-        api.filieres.list(),
-        api.groups.list()
+        fetchWithTimeout(api.modules.list(), []),
+        fetchWithTimeout(api.exams.list(), []),
+        fetchWithTimeout(api.results.list(), []),
+        fetchWithTimeout(api.notifications.list(), []),
+        fetchWithTimeout(api.filieres.list(), []),
+        fetchWithTimeout(api.groups.list(), [])
       ]);
       
       setModules(modulesData);
@@ -69,31 +92,22 @@ export default function App() {
       setFilieres(filieresData);
       setGroups(groupsData);
 
-      if (user.role === 'teacher') {
-        const countData = await api.admin.getStudentCount();
-        setStudentCount(countData.count);
+      if (user.role === 'teacher' || user.role === 'admin') {
+        try {
+          const countData = await api.admin.getStudentCount();
+          setStudentCount(countData.count);
+        } catch (e) {
+          console.error("Failed to fetch student count:", e);
+        }
       }
     } catch (error: any) {
-      console.error("Error fetching data:", error);
-      if (error.message === 'Unauthorized' || error.message === 'Invalid token' || error.message === 'User no longer exists') {
-        setUser(null);
-      }
+      console.error("Global Error fetching data:", error);
     }
   }, [user]);
 
   useEffect(() => {
-    const checkAuth = async () => {
-      try {
-        const response = await api.auth.getProfile();
-        setUser(response.user);
-      } catch (err) {
-        setUser(null);
-      } finally {
-        setLoading(false);
-      }
-    };
     checkAuth();
-  }, []);
+  }, [checkAuth]);
 
   useEffect(() => {
     if (user) {
@@ -104,7 +118,7 @@ export default function App() {
       
       const handleNotification = (notif: Notification) => {
         // Double check filtering on client side for safety
-        if (user.role === 'teacher') {
+        if (user.role === 'teacher' || user.role === 'admin') {
           setNotifications(prev => [notif, ...prev]);
         } else {
           // If student, only accept global or group-specific
@@ -128,7 +142,7 @@ export default function App() {
     }
   }, [user, fetchData]);
 
-  if (loading) {
+  if (loadingAuth) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
@@ -180,14 +194,21 @@ export default function App() {
                     className="flex flex-col items-end mr-2 cursor-pointer hover:opacity-70 transition-opacity"
                     onClick={() => setShowProfileModal(true)}
                   >
-                    <span className="text-[10px] font-black text-indigo-600 uppercase tracking-widest">{user.role === 'teacher' ? 'Enseignant' : 'Étudiant'}</span>
-                    <span className="text-sm font-bold text-slate-900 leading-none mt-1">{user.displayName}</span>
+                    <div className="flex flex-col items-end">
+                      <span className="text-[10px] font-black text-indigo-600 uppercase tracking-widest leading-none">
+                        {user.role === 'teacher' ? 'Enseignant' : user.role === 'admin' ? 'Administrateur' : 'Étudiant'}
+                        {user.registrationNumber && <span className="text-slate-400 ml-2">[{user.registrationNumber}]</span>}
+                      </span>
+                      <span className="text-sm font-bold text-slate-900 mt-1">{user.displayName}</span>
+                      {(user.groupName || user.filiere) && (
+                        <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tight mt-0.5">
+                          {user.groupName} {user.filiere && `• ${user.filiere}`}
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <button 
-                    onClick={async () => {
-                      await api.auth.logout();
-                      setUser(null);
-                    }}
+                    onClick={logout}
                     className="w-12 h-12 rounded-[1.25rem] bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-400 hover:text-rose-500 hover:bg-rose-50 hover:border-rose-100 transition-all group"
                   >
                     <LogOut className="w-5 h-5 group-hover:scale-110 transition-transform" />
@@ -246,7 +267,7 @@ export default function App() {
                           <User className="w-5 h-5" />
                         </div>
                         <div className="min-w-0">
-                          <p className="text-[10px] font-black text-indigo-600 uppercase tracking-widest">{user.role === 'teacher' ? 'Enseignant' : 'Étudiant'}</p>
+                          <p className="text-[10px] font-black text-indigo-600 uppercase tracking-widest">{user.role === 'teacher' ? 'Enseignant' : user.role === 'admin' ? 'Administrateur' : 'Étudiant'}</p>
                           <p className="text-sm font-bold text-slate-900 line-clamp-1">{user.displayName}</p>
                         </div>
                       </div>
@@ -255,57 +276,86 @@ export default function App() {
                       </button>
                     </div>
 
-                    <div className="space-y-1.5 pt-4 border-t border-slate-100">
-                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mb-4 ml-4">Navigation</p>
-                      
-                      {user.role === 'teacher' ? (
-                        <div className="space-y-1.5">
+                    <div className="space-y-8 pt-4 border-t border-slate-100">
+                      {user.role === 'teacher' || user.role === 'admin' ? (
+                        <>
                           {[
-                            { id: 'overview', label: 'Vue d\'ensemble', icon: LayoutDashboard },
-                            { id: 'modules', label: 'Modules', icon: BookOpen },
-                            { id: 'exams', label: 'Examens', icon: ClipboardList },
-                            { id: 'results', label: 'Résultats', icon: History },
-                            { id: 'groups', label: 'Groupes', icon: Users },
-                            { id: 'filieres', label: 'Filières', icon: Database },
-                            { id: 'system', label: 'Système', icon: Database },
-                            { id: 'ai', label: 'Assistant IA', icon: Sparkles },
-                            { id: 'settings', label: 'Paramètres', icon: Settings },
-                          ].map((item) => (
-                            <button
-                              key={item.id}
-                              onClick={() => {
-                                setActiveTeacherTab(item.id);
-                                setView('dashboard');
-                                setIsMobileMenuOpen(false);
-                              }}
-                              className={cn(
-                                "w-full flex items-center gap-4 px-4 py-3.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all",
-                                activeTeacherTab === item.id 
-                                  ? "bg-indigo-600 text-white shadow-lg shadow-indigo-100" 
-                                  : "text-slate-500 hover:bg-slate-50 hover:text-indigo-600"
-                              )}
-                            >
-                              <item.icon className={cn("w-4 h-4", activeTeacherTab === item.id ? "text-white" : "text-slate-400")} />
-                              {item.label}
-                            </button>
+                            {
+                              title: 'Pilotage',
+                              items: [
+                                { id: 'overview', label: 'Vue d\'ensemble', icon: LayoutDashboard },
+                                { id: 'ai', label: 'Assistant IA', icon: Sparkles },
+                              ]
+                            },
+                            {
+                              title: 'Académique',
+                              items: [
+                                { id: 'modules', label: 'Modules', icon: BookOpen },
+                                { id: 'exams', label: 'Examens', icon: ClipboardList },
+                                { id: 'filieres', label: 'Filières', icon: Database },
+                              ]
+                            },
+                            {
+                              title: 'Suivi & Étudiants',
+                              items: [
+                                { id: 'results', label: 'Résultats', icon: History },
+                                { id: 'groups', label: 'Groupes', icon: Users },
+                              ]
+                            },
+                            {
+                              title: 'Administration',
+                              items: [
+                                { id: 'users', label: 'Utilisateurs', icon: Users },
+                                { id: 'system', label: 'Système', icon: LayoutDashboard },
+                                { id: 'settings', label: 'Paramètres', icon: Settings },
+                              ]
+                            }
+                          ].map((group) => (
+                            <div key={group.title} className="space-y-2">
+                              <p className="text-[9px] font-black text-slate-300 uppercase tracking-[0.2em] ml-4 mb-2">{group.title}</p>
+                              <div className="space-y-1">
+                                {group.items.map((item) => (
+                                  <button
+                                    key={item.id}
+                                    onClick={() => {
+                                      setActiveTeacherTab(item.id);
+                                      setView('dashboard');
+                                      setIsMobileMenuOpen(false);
+                                    }}
+                                    className={cn(
+                                      "w-full flex items-center gap-4 px-4 py-3 rounded-xl text-xs font-bold uppercase tracking-widest transition-all",
+                                      activeTeacherTab === item.id 
+                                        ? "bg-indigo-600 text-white shadow-lg shadow-indigo-100" 
+                                        : "text-slate-500 hover:bg-slate-50 hover:text-indigo-600"
+                                    )}
+                                  >
+                                    <item.icon className={cn("w-4 h-4", activeTeacherTab === item.id ? "text-white" : "text-slate-400")} />
+                                    {item.label}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
                           ))}
-                        </div>
+                        </>
                       ) : (
-                        <button
-                          onClick={() => {
-                            setView('dashboard');
-                            setIsMobileMenuOpen(false);
-                          }}
-                          className={cn(
-                            "w-full flex items-center gap-4 px-4 py-3.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all",
-                            view === 'dashboard' 
-                              ? "bg-indigo-600 text-white shadow-lg shadow-indigo-100" 
-                              : "text-slate-500 hover:bg-slate-50 hover:text-indigo-600"
-                          )}
-                        >
-                          <LayoutDashboard className={cn("w-4 h-4", view === 'dashboard' ? "text-white" : "text-slate-400")} />
-                          Tableau de bord
-                        </button>
+                        <div className="space-y-2">
+                          <p className="text-[9px] font-black text-slate-300 uppercase tracking-[0.2em] ml-4 mb-2">Navigation</p>
+                          <button
+                            onClick={() => {
+                              setView('dashboard');
+                              setIsMobileMenuOpen(false);
+                            }}
+                            className={cn(
+                              "w-full flex items-center gap-4 px-4 py-3.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all",
+                              view === 'dashboard' 
+                                ? "bg-indigo-600 text-white shadow-lg shadow-indigo-100" 
+                                : "text-slate-500 hover:bg-slate-50 hover:text-indigo-600"
+                            )}
+                          >
+                            <LayoutDashboard className={cn("w-4 h-4", view === 'dashboard' ? "text-white" : "text-slate-400")} />
+                            Tableau de bord
+                          </button>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -313,8 +363,7 @@ export default function App() {
                   <div className="mt-auto pt-6 border-t border-slate-100">
                     <button 
                       onClick={async () => {
-                        await api.auth.logout();
-                        setUser(null);
+                        await logout();
                         setIsMobileMenuOpen(false);
                       }}
                       className="w-full flex items-center justify-center gap-3 p-4 rounded-2xl bg-rose-50 text-rose-600 font-black text-xs uppercase tracking-widest border border-rose-100 active:scale-95 transition-all"
@@ -341,7 +390,7 @@ export default function App() {
               transition={{ duration: 0.4 }}
               className="w-full"
             >
-              {user.role === 'teacher' ? (
+              {user.role === 'teacher' || user.role === 'admin' ? (
                 <TeacherDashboard 
                   modules={modules} 
                   exams={exams} 
@@ -382,8 +431,8 @@ export default function App() {
                 exam={activeExam} 
                 user={user}
                 moduleName={modules.find(m => m.id === activeExam.moduleId)?.name}
-                onComplete={() => {
-                  fetchData();
+                onComplete={async () => {
+                  await fetchData();
                   setView('dashboard');
                   setActiveExam(null);
                 }}
@@ -396,6 +445,8 @@ export default function App() {
           )}
         </AnimatePresence>
       </main>
+      
+      <Toaster position="top-right" />
       
       {showProfileModal && (
         <ProfileModal 

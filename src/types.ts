@@ -1,4 +1,4 @@
-export type UserRole = 'student' | 'teacher';
+export type UserRole = 'student' | 'teacher' | 'admin';
 
 export interface UserProfile {
   id: number;
@@ -9,6 +9,7 @@ export interface UserProfile {
   filiere?: string;
   groupId?: number;
   filiereId?: number;
+  registrationNumber?: string;
   createdAt: string;
 }
 
@@ -43,7 +44,7 @@ export interface Module {
   hasExams?: boolean;
 }
 
-export type QuestionType = 'multiple-choice' | 'true-false' | 'short-answer' | 'fill-in-the-blanks' | 'ordering' | 'matching';
+export type QuestionType = 'multiple-choice' | 'true-false' | 'short-answer' | 'fill-in-the-blanks' | 'ordering' | 'matching' | 'practical';
 
 export interface QuestionOption {
   text: string;
@@ -54,6 +55,7 @@ export interface Question {
   id: string;
   type: QuestionType;
   text: string;
+  difficulty?: 'easy' | 'medium' | 'hard';
   options?: QuestionOption[];
   matchOptions?: string[];
   correctOptionIndex?: number; // Deprecated for MCQs but kept for compatibility/other types if needed
@@ -65,6 +67,7 @@ export interface Question {
   columnBHeader?: string;
   points: number;
   shuffleOptions?: boolean;
+  section?: string;
 }
 
 export type ExamType = 'controle-continu' | 'fin-de-module';
@@ -79,6 +82,7 @@ export interface Exam {
   questions: Question[];
   durationMinutes: number;
   shuffleQuestions?: boolean;
+  disableCopyPaste?: boolean; // Added
   scheduledAt?: string;
   status: 'draft' | 'active';
   groupId?: number;
@@ -101,6 +105,7 @@ export interface Result {
   studentEmail?: string;
   groupName?: string;
   filiere?: string;
+  aiFeedback?: string;
 }
 
 export interface Notification {
@@ -116,12 +121,57 @@ export interface Notification {
 
 export interface HeaderLine {
   id: string;
-  text: string;
-  fontSize: number;
-  isBold: boolean;
-  isItalic: boolean;
-  alignment: 'left' | 'center' | 'right';
+  type?: 'text' | 'image';
+  text?: string;
+  imageUrl?: string;
+  imageWidth?: number;
+  imageHeight?: number;
+  fontSize?: number;
+  isBold?: boolean;
+  isItalic?: boolean;
+  alignment?: 'left' | 'center' | 'right';
   fontFamily?: string;
+}
+
+export interface HeaderColumn {
+  id: string;
+  width: number; // percentage (1-100)
+  lines: HeaderLine[];
+  borderRight?: boolean;
+  borderLeft?: boolean;
+  bgColor?: string;
+  textColor?: string;
+}
+
+export interface CCRule {
+  min: number;
+  max: number;
+  count: number;
+}
+
+export interface DefaultExamSettings {
+  durationMinutes: number;
+  shuffleQuestions: boolean;
+  disableCopyPaste: boolean;
+}
+
+export interface WordTemplate {
+  id: string;
+  name: string;
+  headerColumns: HeaderColumn[];
+  showHeaderLines?: boolean;
+  showFooter?: boolean;
+  showFooterText?: boolean;
+  showFooterTable?: boolean;
+  footerText?: string;
+  footerFontSize?: number;
+  footerFontFamily?: string;
+  footerTable?: FooterTable;
+  footerColumns?: HeaderColumn[];
+}
+
+export interface FooterTable {
+  rows: string[][];
 }
 
 export interface OrganizationSettings {
@@ -133,11 +183,62 @@ export interface OrganizationSettings {
   institutionName: string;
   orgSubName: string;
   orgLogoUrl?: string;
+  orgLogoUrlRight?: string;
+  footerText?: string;
+  footerFontSize?: number;
+  footerFontFamily?: string;
+  footerTable?: FooterTable;
+  footerColumns?: HeaderColumn[];
+  showFooter?: boolean;
+  showFooterText?: boolean;
+  showFooterTable?: boolean;
   regionName: string;
   academicYear: string;
   orgLogoBgColor: string;
   orgLogoTextColor: string;
   showHeaderLines?: boolean;
+  showFooterLines?: boolean;
   headerLines?: HeaderLine[];
+  headerColumns?: HeaderColumn[];
+  ccRules?: CCRule[];
+  defaultExamSettings?: DefaultExamSettings;
+  templates?: WordTemplate[];
+  watermarkText?: string;
+  showWatermark?: boolean;
+  watermarkColor?: string;
+  watermarkOpacity?: number;
   updatedAt?: string;
+}
+
+export interface AuditLog {
+  id: number;
+  userId: number;
+  action: string;
+  details: string;
+  createdAt: string;
+  userName?: string;
+  userEmail?: string;
+}
+
+export interface LiveStudentSession {
+  studentId: number;
+  studentName: string;
+  registrationNumber: string;
+  answeredCount: number;
+  totalQuestions: number;
+  tabExitCount: number;
+  status: 'active' | 'completed';
+  lastUpdated: number;
+  extraTimeMinutes?: number;
+  timeLeft?: number;
+  cheatAlerts?: Array<{ type: string; details: string; timestamp: number }>;
+}
+
+export interface CheatAlertLog {
+  id: string;
+  studentId: number;
+  studentName: string;
+  type: string;
+  details: string;
+  timestamp: number;
 }

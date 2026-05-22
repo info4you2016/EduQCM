@@ -66,44 +66,137 @@ export const ExamPerformanceModal = ({ exam, onClose, modules, filieres, groups,
       if (resultsExportRef.current) {
         try {
           const canvas = await html2canvas(resultsExportRef.current, {
-            scale: 2,
+            scale: 4,
             useCORS: true,
             logging: false,
+            allowTaint: true,
             backgroundColor: '#ffffff',
             onclone: (doc) => {
-              // Remove all style and link tags to prevent html2canvas from parsing oklch colors
+              // Ultra-aggressive style removal to prevent oklch parsing errors in html2canvas
               const styles = doc.querySelectorAll('style, link[rel="stylesheet"]');
-              styles.forEach(s => s.remove());
+              styles.forEach(s => {
+                try {
+                  s.parentElement?.removeChild(s);
+                } catch (e) {
+                  s.remove();
+                }
+              });
+
+              // Remove problematic oklch from inline styles
+              const allWithStyle = doc.querySelectorAll('[style]');
+              allWithStyle.forEach(el => {
+                const style = el.getAttribute('style') || '';
+                if (style.includes('oklch')) {
+                  el.setAttribute('style', style.replace(/oklch\([^)]+\)/g, '#888888'));
+                }
+              });
+
+              // Also disable all stylesheets in the clone
+              try {
+                for (let i = 0; i < doc.styleSheets.length; i++) {
+                  doc.styleSheets[i].disabled = true;
+                }
+              } catch (e) {}
               
               // Force clean styles on the container itself
               const el = doc.getElementById('results-export-container');
               if (el) {
-                el.style.fontFamily = "'Times New Roman', Times, serif";
+                el.style.fontFamily = "'Times New Roman', Times, 'Amiri', serif";
                 el.style.backgroundColor = '#ffffff';
                 el.style.color = '#000000';
+                
+                const allElements = el.querySelectorAll('*');
+                allElements.forEach((node: any) => {
+                  if (node.style) {
+                    node.style.fontVariantLigatures = 'none';
+                    if (node.style.color && node.style.color.includes('oklch')) node.style.color = '#000000';
+                    if (node.style.backgroundColor && node.style.backgroundColor.includes('oklch')) node.style.backgroundColor = 'transparent';
+                    if (node.style.borderColor && node.style.borderColor.includes('oklch')) node.style.borderColor = '#dddddd';
+                  }
+                });
               }
             }
           });
           
-          const imgData = canvas.toDataURL('image/jpeg', 0.95);
           const pdf = new jsPDF('p', 'mm', 'a4');
           const pdfWidth = pdf.internal.pageSize.getWidth();
           const pdfHeight = pdf.internal.pageSize.getHeight();
+          const margin = 10;
+          const contentWidth = pdfWidth - (2 * margin);
           
-          const imgProps = pdf.getImageProperties(imgData);
-          const totalImgHeight = (imgProps.height * pdfWidth) / imgProps.width;
-          
-          let heightLeft = totalImgHeight;
-          let position = 0;
+          const el = resultsExportRef.current;
+          if (!el) return;
 
-          pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, totalImgHeight, undefined, 'FAST');
-          heightLeft -= pdfHeight;
+          // Helper to add an element to PDF
+          const addElementToPdf = async (element: HTMLElement, addNewPage = false) => {
+            if (addNewPage) pdf.addPage();
 
-          while (heightLeft > 0) {
-            position = heightLeft - totalImgHeight;
-            pdf.addPage();
-            pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, totalImgHeight, undefined, 'FAST');
-            heightLeft -= pdfHeight;
+            const canvas = await html2canvas(element, {
+              scale: 3,
+              useCORS: true,
+              logging: false,
+              backgroundColor: '#ffffff',
+              windowWidth: 1200,
+              onclone: (doc) => {
+                // Ultra-aggressive style removal to prevent oklch parsing errors in html2canvas
+                const styles = doc.querySelectorAll('style, link[rel="stylesheet"]');
+                styles.forEach(s => {
+                  try {
+                    s.parentElement?.removeChild(s);
+                  } catch (e) {
+                    s.remove();
+                  }
+                });
+
+                // Remove problematic oklch from inline styles
+                const allWithStyle = doc.querySelectorAll('[style]');
+                allWithStyle.forEach(el => {
+                  const style = el.getAttribute('style') || '';
+                  if (style.includes('oklch')) {
+                    el.setAttribute('style', style.replace(/oklch\([^)]+\)/g, '#888888'));
+                  }
+                });
+
+                const allElements = doc.querySelectorAll('*');
+                allElements.forEach((node: any) => {
+                  if (node.style) {
+                    if (node.style.color && node.style.color.includes('oklch')) node.style.color = '#000000';
+                    if (node.style.backgroundColor && node.style.backgroundColor.includes('oklch')) node.style.backgroundColor = 'transparent';
+                    if (node.style.borderColor && node.style.borderColor.includes('oklch')) node.style.borderColor = '#dddddd';
+                  }
+                });
+              }
+            });
+
+            const imgData = canvas.toDataURL('image/jpeg', 0.95);
+            const imgProps = pdf.getImageProperties(imgData);
+            const imgHeight = (imgProps.height * contentWidth) / imgProps.width;
+            
+            pdf.addImage(imgData, 'JPEG', margin, margin, contentWidth, imgHeight, undefined, 'FAST');
+            return imgHeight;
+          };
+
+          // 1. Capture Summary
+          const summaryEl = el.querySelector('#export-summary-section') as HTMLElement;
+          if (summaryEl) {
+            await addElementToPdf(summaryEl);
+          }
+
+          // 2. Capture Each Student Card
+          const studentCards = el.querySelectorAll('.student-detail-card');
+          for (let i = 0; i < studentCards.length; i++) {
+            await addElementToPdf(studentCards[i] as HTMLElement, true);
+          }
+
+          // Add Page Numbers
+          const totalPages = pdf.getNumberOfPages();
+          for (let i = 1; i <= totalPages; i++) {
+            pdf.setPage(i);
+            pdf.setFont('helvetica', 'normal');
+            pdf.setFontSize(8);
+            pdf.setTextColor(150);
+            pdf.text(`${exam.title} - Page ${i} / ${totalPages}`, margin, pdfHeight - 5);
+            pdf.text(`Généré le ${new Date().toLocaleDateString()}`, pdfWidth - margin, pdfHeight - 5, { align: 'right' });
           }
 
           pdf.save(`Resultats_${exam.title.replace(/\s+/g, '_')}.pdf`);

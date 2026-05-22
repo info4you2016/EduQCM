@@ -16,7 +16,7 @@ interface NotificationsDropdownProps {
 }
 
 export const NotificationsDropdown: React.FC<NotificationsDropdownProps> = ({ 
-  notifications, 
+  notifications = [], 
   user,
   onRefresh, 
   onAddNotification,
@@ -29,7 +29,7 @@ export const NotificationsDropdown: React.FC<NotificationsDropdownProps> = ({
 
   const isTeacher = user?.role === 'teacher';
 
-  const unreadNotifications = notifications.filter(n => !n.read);
+  const unreadNotifications = (notifications || []).filter(n => !n.read);
   const unreadCount = unreadNotifications.length;
 
   useEffect(() => {
@@ -94,7 +94,7 @@ export const NotificationsDropdown: React.FC<NotificationsDropdownProps> = ({
             </div>
 
             <div className="overflow-y-auto max-h-[380px] p-4 space-y-3 custom-scrollbar">
-              {notifications.length === 0 ? (
+              {(notifications || []).length === 0 ? (
                 <div className="py-12 text-center">
                   <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-4">
                     <Bell className="w-8 h-8 text-slate-200" />
@@ -102,7 +102,7 @@ export const NotificationsDropdown: React.FC<NotificationsDropdownProps> = ({
                   <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Aucune annonce</p>
                 </div>
               ) : (
-                notifications.map((notif) => (
+                (notifications || []).map((notif) => (
                   <Card 
                     key={notif.id} 
                     className={cn(

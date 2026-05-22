@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { 
   Users, BookOpen, ClipboardList, Bell, Plus, Search, Filter, 
   ChevronDown, Edit2, Trash2, LayoutDashboard, Database, Eye, History, CheckCircle2, Star, Clock, BarChart, Target,
-  FileDown, Sparkles, FileText, Settings 
+  FileDown, Sparkles, FileText, Settings, Loader2, Copy, AlertTriangle, Radio
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { api } from '../../lib/api';
@@ -15,8 +15,16 @@ import { EmptyState } from '../ui/EmptyState';
 import { Modal } from '../ui/Modal';
 import { DatabaseManagement } from '../sections/DatabaseManagement';
 import { OrganizationSettingsView } from '../sections/OrganizationSettingsView';
+import { ModulesTab } from '../sections/ModulesTab';
+import { ExamsTab } from '../sections/ExamsTab';
+import { StatisticsTab } from '../sections/StatisticsTab';
 import { ExamPreviewModal } from '../modals/ExamPreviewModal';
+import { LiveSupervisionModal } from '../modals/LiveSupervisionModal';
 import { FiliereGroupManagement } from './FiliereGroupManagement';
+import { AdminUserManagement } from '../sections/AdminUserManagement';
+import { AuditLogsView } from '../sections/AuditLogsView';
+import { AiAssistantView } from './AiAssistantView';
+import { ResultDetailModal } from '../modals/ResultDetailModal';
 import { AddModuleForm } from '../forms/AddModuleForm';
 import { AddNotificationForm } from '../forms/AddNotificationForm';
 import { AddExamForm } from '../forms/AddExamForm';
@@ -24,9 +32,14 @@ import { ExamPerformanceModal } from '../modals/ExamPerformanceModal';
 import { ActivateExamModal } from '../modals/ActivateExamModal';
 import { ExamExportTemplate } from '../ExamExportTemplate';
 import { ResultsExportTemplate } from '../ResultsExportTemplate';
+import { PVExportTemplate } from '../PVExportTemplate';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import { exportExamToWord } from '../../lib/docxExport';
+import { exportPVToWord } from '../../lib/pvDocxExport';
+import Papa from 'papaparse';
+import { saveAs } from 'file-saver';
+import * as XLSX from 'xlsx';
 
 interface TeacherDashboardProps {
   modules: Module[];
@@ -55,7 +68,7 @@ export const TeacherDashboard = ({
   activeTabOverride,
   onTabChange
 }: TeacherDashboardProps) => {
-  const [activeTab, setActiveInternalTab] = useState<'overview' | 'modules' | 'exams' | 'results' | 'notifications' | 'groups' | 'filieres' | 'system' | 'ai' | 'settings'>(
+  const [activeTab, setActiveInternalTab] = useState<'overview' | 'modules' | 'exams' | 'results' | 'notifications' | 'groups' | 'filieres' | 'system' | 'ai' | 'settings' | 'users' | 'audit'>(
     (activeTabOverride as any) || 'overview'
   );
 
@@ -78,15 +91,95 @@ export const TeacherDashboard = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [resultsFilterModule, setResultsFilterModule] = useState<string>('all');
   const [resultsFilterGroup, setResultsFilterGroup] = useState<string>('all');
+  const [resultsFilterScore, setResultsFilterScore] = useState<string>('all');
   const [resultsPage, setResultsPage] = useState(1);
   const resultsPerPage = 10;
   const [resultsViewMode, setResultsViewMode] = useState<'by-exam' | 'all-results'>('by-exam');
   const [selectedExamId, setSelectedExamId] = useState<number | null>(null);
   const [sortBy, setSortBy] = useState<'createdAt' | 'title'>('createdAt');
   const [previewExam, setPreviewExam] = useState<Exam | null>(null);
+  const [supervisingExam, setSupervisingExam] = useState<Exam | null>(null);
   const [performanceExam, setPerformanceExam] = useState<Exam | null>(null);
+  const [viewingResult, setViewingResult] = useState<Result | null>(null);
   const [activatingExam, setActivatingExam] = useState<Exam | null>(null);
   const [orgSettings, setOrgSettings] = useState<OrganizationSettings | null>(null);
+
+  const filteredResultsStats = useMemo(() => {
+    const list = results.filter(r => {
+      const exam = exams.find(e => e.id === r.examId);
+      const matchesSearch = r.studentName?.toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesExam = !selectedExamId || r.examId === selectedExamId;
+      const matchesModule = resultsFilterModule === 'all' || exam?.moduleId === Number(resultsFilterModule);
+      const matchesGroup = resultsFilterGroup === 'all' || r.groupName === groups.find(g => g.id === Number(resultsFilterGroup))?.name;
+      
+      const pct = (r.score / (r.totalPoints || 1)) * 100;
+      const matchesScore = resultsFilterScore === 'all' ||
+        (resultsFilterScore === 'excellent' && pct >= 80) ||
+        (resultsFilterScore === 'average' && pct >= 50 && pct < 80) ||
+        (resultsFilterScore === 'fail' && pct < 50);
+
+      return matchesSearch && matchesExam && matchesModule && matchesGroup && matchesScore;
+    });
+
+    const total = list.length;
+    const avgScore = total > 0 ? (list.reduce((acc, r) => acc + (r.score / (r.totalPoints || 1)), 0) / total) * 100 : 0;
+    const successCount = list.filter(r => (r.score / (r.totalPoints || 1)) >= 0.5).length;
+    const successPercent = total > 0 ? (successCount / total) * 100 : 0;
+
+    return {
+      list,
+      total,
+      avgScore: Math.round(avgScore),
+      successPercent: Math.round(successPercent)
+    };
+  }, [results, exams, searchQuery, selectedExamId, resultsFilterModule, resultsFilterGroup, resultsFilterScore, groups]);
+
+  const resultsSummaryStats = useMemo(() => {
+    if (results.length === 0) return { avg: 0, success: 0, total: 0 };
+    const total = results.length;
+    const avg = results.reduce((acc, r) => acc + (r.score / (r.totalPoints || 1)), 0) / total;
+    const successCount = results.filter(r => (r.score / (r.totalPoints || 1)) >= 0.5).length;
+    return {
+      avg: Math.round(avg * 100),
+      success: Math.round((successCount / total) * 100),
+      total
+    };
+  }, [results]);
+
+  const sortedAndPaginatedResults = useMemo(() => {
+    const sorted = [...filteredResultsStats.list].sort((a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime());
+    const totalPages = Math.ceil(sorted.length / resultsPerPage);
+    const startIndex = (resultsPage - 1) * resultsPerPage;
+    const paginated = sorted.slice(startIndex, startIndex + resultsPerPage);
+    return {
+      sorted,
+      totalPages: Math.max(1, totalPages),
+      paginated
+    };
+  }, [filteredResultsStats.list, resultsPage, resultsPerPage]);
+
+  const statsCards = (
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+      <StatCard 
+        title="Total Copies" 
+        value={resultsSummaryStats.total} 
+        icon={ClipboardList} 
+        color="indigo" 
+      />
+      <StatCard 
+        title="Moyenne Générale" 
+        value={`${resultsSummaryStats.avg}%`} 
+        icon={Star} 
+        color="emerald" 
+      />
+      <StatCard 
+        title="Taux de Réussite" 
+        value={`${resultsSummaryStats.success}%`} 
+        icon={CheckCircle2} 
+        color="amber" 
+      />
+    </div>
+  );
 
   React.useEffect(() => {
     const fetchSettings = async () => {
@@ -109,6 +202,46 @@ export const TeacherDashboard = ({
   const resultsExportRef = React.useRef<HTMLDivElement>(null);
   const [isExportingResults, setIsExportingResults] = useState(false);
   const [resultsExportData, setResultsExportData] = useState<{ exam: Exam, results: Result[], module: Module, filiereName: string, filiereLevel?: string, groupName: string } | null>(null);
+
+  // PV Export states
+  const pvExportRef = React.useRef<HTMLDivElement>(null);
+  const [isExportingPV, setIsExportingPV] = useState(false);
+  const [pvExportData, setPvExportData] = useState<{ exam: Exam, results: Result[], module: Module, filiereName: string, filiereLevel?: string, groupName: string } | null>(null);
+
+  const handleExportPV = async (exam: Exam) => {
+    const module = modules.find(m => m.id === exam.moduleId);
+    const examResults = results.filter(r => r.examId === exam.id);
+    if (!module || examResults.length === 0) {
+      alert("Aucun résultat à exporter ou module introuvable.");
+      return;
+    }
+
+    const groupId = exam.groupId || groups.find(g => g.name === exam.groupName)?.id;
+    const group = groups.find(g => g.id === groupId);
+    const filiere = filieres.find(f => f.id === group?.filiereId || module.filiereId);
+
+    const groupName = group?.name || exam.groupName || 'N/A';
+    const filiereName = filiere ? `[${filiere.code}] ${filiere.name}` : 'N/A';
+    const filiereLevel = filiere?.niveau || '';
+
+    setIsExportingPV(true);
+    try {
+      await exportPVToWord(
+        exam,
+        examResults,
+        module,
+        filiereName,
+        filiereLevel,
+        groupName,
+        orgSettings
+      );
+    } catch (err) {
+      console.error("PV Word Export failed:", err);
+      alert("Erreur lors de l'exportation du PV de fin de module au format Word.");
+    } finally {
+      setIsExportingPV(false);
+    }
+  };
 
   const handleExportResultsPDF = async (exam: Exam) => {
     const module = modules.find(m => m.id === exam.moduleId);
@@ -140,61 +273,134 @@ export const TeacherDashboard = ({
     setTimeout(async () => {
       if (resultsExportRef.current) {
         try {
+          // Helper to scrub problematic CSS like oklch that crashes html2canvas
+          const scrubOklch = (doc: Document) => {
+            try {
+              // 1. Remove all external stylesheets and existing style blocks
+              const styles = doc.querySelectorAll('style, link[rel="stylesheet"]');
+              styles.forEach(s => {
+                try {
+                  s.parentElement?.removeChild(s);
+                } catch (e) {
+                  s.remove();
+                }
+              });
+
+              // 2. Explicitly disable all stylesheets in the clone in case some survived
+              for (let i = 0; i < doc.styleSheets.length; i++) {
+                try {
+                  doc.styleSheets[i].disabled = true;
+                } catch (e) {}
+              }
+
+              // 3. Inject a clean, safe style block
+              const cleanStyle = doc.createElement('style');
+              cleanStyle.innerHTML = `
+                * { 
+                  color: #000000 !important; 
+                  border-color: #000000 !important;
+                  box-shadow: none !important;
+                  text-shadow: none !important;
+                  background-image: none !important;
+                }
+                table, td, th { border: 1px solid #000 !important; border-collapse: collapse !important; }
+                .text-emerald-600, .text-green-600 { color: #059669 !important; }
+                .bg-emerald-50, .bg-green-50 { background-color: #f0fdf4 !important; }
+                h1, h2, h3, h4, h5, h6 { color: #000 !important; }
+              `;
+              doc.head.appendChild(cleanStyle);
+
+              // 4. Scrub all inline styles
+              const allElements = doc.querySelectorAll('*');
+              allElements.forEach(el => {
+                const element = el as HTMLElement;
+                if (element.style) {
+                  element.style.fontVariantLigatures = 'none';
+                }
+                const styleAttr = element.getAttribute('style') || '';
+                if (styleAttr.includes('oklch')) {
+                  element.setAttribute('style', styleAttr.replace(/oklch\([^)]+\)/g, '#888888'));
+                }
+              });
+            } catch (err) {
+              console.warn("Scrubbing failed, but continuing:", err);
+            }
+          };
+
           const canvas = await html2canvas(resultsExportRef.current, {
-            scale: 2,
+            scale: 4, 
             useCORS: true,
             logging: false,
+            allowTaint: true,
             backgroundColor: '#ffffff',
             windowWidth: 1200,
             onclone: (doc) => {
-              // Remove all style and link tags to prevent html2canvas from parsing oklch colors
-              const styles = doc.querySelectorAll('style, link[rel="stylesheet"]');
-              styles.forEach(s => s.remove());
-              
+              scrubOklch(doc);
               // Force clean styles on the container itself
-              const el = doc.getElementById('results-export-container');
-              if (el) {
-                el.style.fontFamily = "'Times New Roman', Times, serif";
-                el.style.backgroundColor = '#ffffff';
-                el.style.color = '#000000';
+              const containerEl = doc.getElementById('results-export-container');
+              if (containerEl) {
+                containerEl.style.fontFamily = "'Times New Roman', Times, 'Amiri', serif";
+                containerEl.style.backgroundColor = '#ffffff';
+                containerEl.style.color = '#000000';
               }
             }
           });
           
-          const imgData = canvas.toDataURL('image/jpeg', 0.95);
           const pdf = new jsPDF('p', 'mm', 'a4');
           const pdfWidth = pdf.internal.pageSize.getWidth();
           const pdfHeight = pdf.internal.pageSize.getHeight();
-          
-          const imgProps = pdf.getImageProperties(imgData);
-          const totalImgHeight = (imgProps.height * pdfWidth) / imgProps.width;
-          
-          let heightLeft = totalImgHeight;
-          let position = 0;
-          const totalPages = Math.ceil(totalImgHeight / pdfHeight);
-          let currentPage = 1;
+          const margin = 10;
+          const contentWidth = pdfWidth - (2 * margin);
 
-          pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, totalImgHeight, undefined, 'FAST');
-          
-          // Add page number
-          pdf.setFontSize(8);
-          pdf.setTextColor(100);
-          pdf.text(`Page ${currentPage} / ${totalPages}`, pdfWidth / 2, pdfHeight - 7, { align: 'center' });
-          
-          heightLeft -= pdfHeight;
+          const el = resultsExportRef.current;
+          if (!el) return;
 
-          while (heightLeft > 0) {
-            position = heightLeft - totalImgHeight;
-            pdf.addPage();
-            currentPage++;
-            pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, totalImgHeight, undefined, 'FAST');
+          // Helper to add an element to PDF
+          const addElementToPdf = async (element: HTMLElement, addNewPage = false) => {
+            if (addNewPage) pdf.addPage();
+
+            const canvas = await html2canvas(element, {
+              scale: 3,
+              useCORS: true,
+              logging: false,
+              backgroundColor: '#ffffff',
+              windowWidth: 1200,
+              onclone: (doc) => {
+                scrubOklch(doc);
+              }
+            });
+
+            const imgData = canvas.toDataURL('image/jpeg', 0.95);
+            const imgProps = pdf.getImageProperties(imgData);
+            const imgHeight = (imgProps.height * contentWidth) / imgProps.width;
             
-            // Add page number
+            // If it's too tall for one page, we might still need some slicing, 
+            // but for one student it usually fits.
+            pdf.addImage(imgData, 'JPEG', margin, margin, contentWidth, imgHeight, undefined, 'FAST');
+            return imgHeight;
+          };
+
+          // 1. Capture Summary
+          const summaryEl = el.querySelector('#export-summary-section') as HTMLElement;
+          if (summaryEl) {
+            await addElementToPdf(summaryEl);
+          }
+
+          // 2. Capture Each Student Card
+          const studentCards = el.querySelectorAll('.student-detail-card');
+          for (let i = 0; i < studentCards.length; i++) {
+            await addElementToPdf(studentCards[i] as HTMLElement, true);
+          }
+
+          // Add Page Numbers to all pages
+          const totalPages = pdf.getNumberOfPages();
+          for (let i = 1; i <= totalPages; i++) {
+            pdf.setPage(i);
+            pdf.setFont('helvetica', 'normal');
             pdf.setFontSize(8);
-            pdf.setTextColor(100);
-            pdf.text(`Page ${currentPage} / ${totalPages}`, pdfWidth / 2, pdfHeight - 7, { align: 'center' });
-            
-            heightLeft -= pdfHeight;
+            pdf.setTextColor(150);
+            pdf.text(`${exam.title} - Page ${i} / ${totalPages}`, margin, pdfHeight - 5);
+            pdf.text(`Généré le ${new Date().toLocaleDateString()}`, pdfWidth - margin, pdfHeight - 5, { align: 'right' });
           }
 
           pdf.save(`Resultats_${exam.title.replace(/\s+/g, '_')}.pdf`);
@@ -236,66 +442,194 @@ export const TeacherDashboard = ({
     setTimeout(async () => {
       if (exportRef.current) {
         try {
+          // Helper to scrub problematic CSS like oklch that crashes html2canvas
+          const scrubOklch = (doc: Document) => {
+            try {
+              // 1. Remove all external stylesheets and existing style blocks
+              const styles = doc.querySelectorAll('style, link[rel="stylesheet"]');
+              styles.forEach(s => {
+                try {
+                  s.parentElement?.removeChild(s);
+                } catch (e) {
+                  s.remove();
+                }
+              });
+
+              // 2. Explicitly disable all stylesheets in the clone in case some survived
+              for (let i = 0; i < doc.styleSheets.length; i++) {
+                try {
+                  doc.styleSheets[i].disabled = true;
+                } catch (e) {}
+              }
+
+              // 3. Inject a clean, safe style block
+              const cleanStyle = doc.createElement('style');
+              cleanStyle.innerHTML = `
+                * { 
+                  color: #000000 !important; 
+                  border-color: #000000 !important;
+                  box-shadow: none !important;
+                  text-shadow: none !important;
+                  background-image: none !important;
+                }
+                table, td, th { border: 1px solid #000 !important; border-collapse: collapse !important; }
+                h1, h2, h3, h4, h5, h6 { color: #000 !important; }
+              `;
+              doc.head.appendChild(cleanStyle);
+
+              // 4. Scrub all inline styles
+              const allElements = doc.querySelectorAll('*');
+              allElements.forEach(el => {
+                const node = el as HTMLElement;
+                if (node.style) {
+                  node.style.fontVariantLigatures = 'none';
+                }
+                const styleAttr = node.getAttribute('style') || '';
+                if (styleAttr.includes('oklch')) {
+                  node.setAttribute('style', styleAttr.replace(/oklch\([^)]+\)/g, '#888888'));
+                }
+              });
+            } catch (err) {
+              console.warn("Scrubbing failed, but continuing:", err);
+            }
+          };
+
           const canvas = await html2canvas(exportRef.current, {
-            scale: 3, // Higher scale for crisp text
+            scale: 4, 
             useCORS: true,
             logging: false,
+            allowTaint: true,
             backgroundColor: '#ffffff',
             windowWidth: 1200,
             onclone: (doc) => {
-              // Remove all style and link tags to prevent html2canvas from parsing oklch colors
-              const styles = doc.querySelectorAll('style, link[rel="stylesheet"]');
-              styles.forEach(s => s.remove());
-              
+              scrubOklch(doc);
               // Force clean styles on the container itself
-              const el = doc.getElementById('export-container');
-              if (el) {
-                el.style.fontFamily = "'Times New Roman', Times, serif";
-                el.style.backgroundColor = '#ffffff';
-                el.style.color = '#000000';
+              const containerEl = doc.getElementById('export-container');
+              if (containerEl) {
+                containerEl.style.fontFamily = "'Times New Roman', Times, 'Amiri', serif";
+                containerEl.style.backgroundColor = '#ffffff';
+                containerEl.style.color = '#000000';
               }
             }
           });
           
-          const imgData = canvas.toDataURL('image/jpeg', 0.9); // Use JPEG for better scaling
+          const filename = showAnswers ? `Correction_${exam.title.replace(/\s+/g, '_')}.pdf` : `Examen_${exam.title.replace(/\s+/g, '_')}.pdf`;
+          
+          const el = exportRef.current;
+          if (!el) return;
+
+          // Capture QR Code first if it exists
+          const qrCodeEl = el.querySelector('.qr-code-verification-wrap') as HTMLElement;
+          let qrCodeImgData = '';
+          if (qrCodeEl) {
+            const qrCanvas = await html2canvas(qrCodeEl, { 
+              scale: 3, 
+              backgroundColor: '#ffffff', 
+              logging: false,
+              onclone: (doc) => {
+                scrubOklch(doc);
+              }
+            });
+            qrCodeImgData = qrCanvas.toDataURL('image/png');
+          }
+
           const pdf = new jsPDF('p', 'mm', 'a4');
           const pdfWidth = pdf.internal.pageSize.getWidth();
           const pdfHeight = pdf.internal.pageSize.getHeight();
-          
-          const imgProps = pdf.getImageProperties(imgData);
-          const totalImgHeight = (imgProps.height * pdfWidth) / imgProps.width;
-          
-          let heightLeft = totalImgHeight;
-          let position = 0;
-          const totalPages = Math.ceil(totalImgHeight / pdfHeight);
-          let currentPage = 1;
+          const margin = 12; // Slightly larger margins
+          const contentWidth = pdfWidth - (2 * margin);
 
-          // Page 1
-          pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, totalImgHeight, undefined, 'FAST');
-          
-          // Add page number
-          pdf.setFontSize(8);
-          pdf.setTextColor(100);
-          pdf.text(`Page ${currentPage} / ${totalPages}`, pdfWidth / 2, pdfHeight - 7, { align: 'center' });
+          const addPageFooter = (num: number, isLast = false) => {
+            const hasTextFooter = orgSettings?.showFooter !== false;
 
-          heightLeft -= pdfHeight;
-
-          // Additional pages if needed
-          while (heightLeft > 0) {
-            position = heightLeft - totalImgHeight;
-            pdf.addPage();
-            currentPage++;
-            pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, totalImgHeight, undefined, 'FAST');
+            if (hasTextFooter) {
+              pdf.setFontSize(8);
+              pdf.setTextColor(150);
+              pdf.text(`${exam.title} - Page ${num}`, margin, pdfHeight - 5);
+              
+              const baseFooter = orgSettings?.footerText || `OFPPT / ${module.code}`;
+              const rightText = isLast 
+                ? `${baseFooter} - Généré le ${new Date().toLocaleDateString()}`
+                : baseFooter;
+              
+              pdf.text(rightText, pdfWidth - margin, pdfHeight - 5, { align: 'right' });
+            }
             
-            // Add page number
-            pdf.setFontSize(8);
-            pdf.setTextColor(100);
-            pdf.text(`Page ${currentPage} / ${totalPages}`, pdfWidth / 2, pdfHeight - 7, { align: 'center' });
+            if (qrCodeImgData) {
+              // Add QR code to the bottom center
+              const qrSize = 10;
+              pdf.addImage(qrCodeImgData, 'PNG', (pdfWidth / 2) - (qrSize / 2), pdfHeight - 14, qrSize, qrSize);
+            }
+          };
+
+          // Select all logical blocks to capture separately
+          // This prevents questions from being sliced in half
+          const blocks = Array.from(el.querySelectorAll('.header-table, .metadata-table, .candidate-info-wrap, div[style*="border: 1.5px solid #000"], div[style*="border: 1px solid #000"], .section-header, .question-block, .correction-summary, div[style*="marginTop: 40px"]'));
+          
+          let currentY = margin;
+          let pageCount = 1;
+
+          for (const block of blocks) {
+            const canvas = await html2canvas(block as HTMLElement, {
+              scale: 3, // Higher scale for clarity
+              useCORS: true,
+              logging: false,
+              backgroundColor: '#ffffff',
+              windowWidth: 1200,
+              onclone: (doc) => {
+                scrubOklch(doc);
+              }
+            });
+
+            const imgData = canvas.toDataURL('image/jpeg', 0.95);
+            const imgProps = pdf.getImageProperties(imgData);
+            const imgHeight = (imgProps.height * contentWidth) / imgProps.width;
+
+            const blockEl = block as HTMLElement;
+            const isHeader = blockEl.classList.contains('section-header');
             
-            heightLeft -= pdfHeight;
+            // Check if block fits on current page
+            let needsNewPage = (currentY + imgHeight > pdfHeight - 15);
+
+            // Orphan title prevention: If a section header is too close to the bottom of the page
+            // we move it to the next page so it's not separated from the questions it introduces.
+            if (!needsNewPage && isHeader) {
+              // 45mm is a safe heuristic for: Header height (~15mm) + Gap (~10mm) + First question (~20mm)
+              if (currentY + imgHeight + 45 > pdfHeight - 15) {
+                needsNewPage = true;
+              }
+            }
+
+            if (needsNewPage) {
+              // Add Footer and Page Number before adding new page
+              addPageFooter(pageCount);
+
+              pdf.addPage();
+              currentY = margin;
+              pageCount++;
+            }
+
+            pdf.addImage(imgData, 'JPEG', margin, currentY, contentWidth, imgHeight, undefined, 'FAST');
+            
+            // Add spacing after block
+            if (isHeader) {
+              currentY += imgHeight + 8; // Medium gap after header
+            } else if (blockEl.classList.contains('header-table') || blockEl.classList.contains('metadata-table')) {
+              currentY += imgHeight + 6; // Standard gap
+            } else {
+              currentY += imgHeight + 4; // Small gap between questions
+            }
+
+            // If the next sibling is a section header, add extra space before it
+            const nextBlock = blocks[blocks.indexOf(block) + 1] as HTMLElement | undefined;
+            if (nextBlock && nextBlock.classList.contains('section-header')) {
+              currentY += 12; // Extra breathing room before a new section
+            }
           }
 
-          const filename = showAnswers ? `Correction_${exam.title.replace(/\s+/g, '_')}.pdf` : `Examen_${exam.title.replace(/\s+/g, '_')}.pdf`;
+          // Final Footer and Page Number
+          addPageFooter(pageCount, true);
+
           pdf.save(filename);
         } catch (err) {
           console.error("PDF Export failed:", err);
@@ -330,11 +664,122 @@ export const TeacherDashboard = ({
         totalPoints,
         showAnswers,
         orgSettings,
-        filiereLevel
+        filiereLevel,
+        user.displayName
       );
     } catch (err) {
       console.error("Word Export failed:", err);
       alert("Erreur lors de l'exportation Word.");
+    }
+  };
+
+  const handleExportModuleExcel = async (module: Module) => {
+    try {
+      setIsExporting(true);
+      
+      // 1. Fetch relevant students
+      // We'll get all students from the filiere assigned to this module
+      let students: UserProfile[] = [];
+      
+      try {
+        const allUsers = await api.admin.listUsers();
+        if (module.filiereId) {
+          students = allUsers.filter((u: any) => u.filiereId === module.filiereId && u.role === 'student');
+        } else {
+          // If no filiere fixed to module, get students who have taken at least one exam in this module
+          const moduleExamIds = exams.filter(e => e.moduleId === module.id).map(e => e.id);
+          const studentIdsWithResults = new Set(results.filter(r => moduleExamIds.includes(r.examId)).map(r => r.studentId));
+          students = allUsers.filter((u: any) => studentIdsWithResults.has(u.id) && u.role === 'student');
+        }
+      } catch (err) {
+        console.error("Failed to fetch students for export:", err);
+        // Fallback to students present in results if admin list fails
+        const moduleExamIds = exams.filter(e => e.moduleId === module.id).map(e => e.id);
+        const studentIdsWithResults = new Set(results.filter(r => moduleExamIds.includes(r.examId)).map(r => r.studentId));
+        
+        // We don't have full info but we can try to reconstruct from results
+        const uniqueStudentsMap = new Map();
+        results.forEach(r => {
+          if (moduleExamIds.includes(r.examId) && !uniqueStudentsMap.has(r.studentId)) {
+            uniqueStudentsMap.set(r.studentId, {
+              id: r.studentId,
+              displayName: r.studentName,
+              groupName: r.groupName,
+              registrationNumber: '' // We don't have it in results
+            });
+          }
+        });
+        students = Array.from(uniqueStudentsMap.values());
+      }
+
+      if (students.length === 0) {
+        alert("Aucun étudiant trouvé pour ce module.");
+        setIsExporting(false);
+        return;
+      }
+
+      // 2. Identify Exams (CCs and EFM)
+      const moduleExams = exams
+        .filter(e => e.moduleId === module.id)
+        .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+      
+      const ccExams = moduleExams.filter(e => e.type !== 'fin-de-module');
+      const efmExam = moduleExams.find(e => e.type === 'fin-de-module');
+
+      // 3. Prepare Data Rows
+      const rows = students.sort((a, b) => (a.displayName || '').localeCompare(b.displayName || '')).map(student => {
+        // Handle name splitting (Assumption: LASTNAME Firstname or Firstname LASTNAME)
+        // We'll try to split and put them in columns.
+        const nameParts = (student.displayName || '').trim().split(/\s+/);
+        let nom = student.displayName || '';
+        let prenom = '';
+        
+        if (nameParts.length >= 2) {
+          nom = nameParts[0].toUpperCase();
+          prenom = nameParts.slice(1).join(' ');
+        }
+
+        const row: any = {
+          'CEF': student.registrationNumber || '-',
+          'Nom': nom,
+          'Prénom': prenom,
+        };
+
+        // Add CC columns
+        ccExams.forEach((exam, idx) => {
+          const result = results.find(r => r.examId === exam.id && r.studentId === student.id);
+          row[`CC${idx + 1}`] = result ? result.score : '-';
+        });
+
+        // Add EFM column
+        if (efmExam) {
+          const result = results.find(r => r.examId === efmExam.id && r.studentId === student.id);
+          row['Fin de module'] = result ? result.score : '-';
+        }
+
+        return row;
+      });
+
+      // 4. Create Workbook and Download
+      const worksheet = XLSX.utils.json_to_sheet(rows);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Notes");
+
+      // Auto-size columns
+      const colWidths = Object.keys(rows[0] || {}).map(key => {
+        const headerLen = key.length;
+        const maxContentLen = rows.reduce((max, row) => Math.max(max, String(row[key]).length), 0);
+        return { wch: Math.max(headerLen, maxContentLen) + 2 };
+      });
+      worksheet['!cols'] = colWidths;
+
+      XLSX.writeFile(workbook, `Notes_${module.code}_${module.name.replace(/\s+/g, '_')}.xlsx`);
+
+    } catch (err) {
+      console.error("Excel Export Error:", err);
+      alert("Une erreur est survenue lors de l'exportation vers Excel.");
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -396,6 +841,30 @@ export const TeacherDashboard = ({
   };
 
   const [togglingExamId, setTogglingExamId] = useState<number | null>(null);
+  const [duplicatingExamId, setDuplicatingExamId] = useState<number | null>(null);
+
+  const handleDuplicateExam = async (exam: Exam) => {
+    try {
+      setDuplicatingExamId(exam.id);
+      await api.exams.create({
+        ...exam,
+        title: `${exam.title} (Copie)`,
+        status: 'draft',
+        // Preserve other properties
+        questions: exam.questions.map(q => ({
+          ...q,
+          id: Math.random().toString(36).substr(2, 9)
+        }))
+      });
+      alert("Examen dupliqué avec succès !");
+      onRefresh();
+    } catch (error: any) {
+      console.error("Error duplicating exam:", error);
+      alert(`Erreur: ${error.message || "Impossible de dupliquer l'examen"}`);
+    } finally {
+      setDuplicatingExamId(null);
+    }
+  };
 
   const toggleExamStatus = async (exam: Exam) => {
     try {
@@ -432,46 +901,85 @@ export const TeacherDashboard = ({
     }
   };
 
+  const navGroups = [
+    {
+      title: 'Pilotage',
+      items: [
+        { id: 'overview', label: 'Vue d\'ensemble', icon: LayoutDashboard },
+        { id: 'ai', label: 'Assistant IA', icon: Sparkles },
+      ]
+    },
+    {
+      title: 'Académique',
+      items: [
+        { id: 'modules', label: 'Modules', icon: BookOpen },
+        { id: 'exams', label: 'Examens', icon: ClipboardList },
+        { id: 'filieres', label: 'Filières', icon: Database },
+      ]
+    },
+    {
+      title: 'Suivi & Étudiants',
+      items: [
+        { id: 'results', label: 'Résultats', icon: History },
+        { id: 'groups', label: 'Groupes', icon: Users },
+      ]
+    },
+    {
+      title: 'Administration',
+      items: [
+        { id: 'users', label: 'Utilisateurs', icon: Users },
+        { id: 'audit', label: 'Audit / Logs', icon: History },
+        { id: 'system', label: 'Système', icon: LayoutDashboard },
+        { id: 'settings', label: 'Paramètres', icon: Settings },
+      ]
+    }
+  ];
+
   return (
     <div className="flex flex-col lg:flex-row gap-10">
       {/* Sidebar Navigation - Hidden on mobile, shown on lg screens */}
       <aside className="hidden lg:block lg:w-72 shrink-0">
-        <div className="sticky top-10 space-y-8">
-          <div className="px-2">
-            <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mb-6">Menu Principal</h3>
-            <nav className="space-y-1.5">
-              {[
-                { id: 'overview', label: 'Vue d\'ensemble', icon: LayoutDashboard },
-                { id: 'modules', label: 'Modules', icon: BookOpen },
-                { id: 'exams', label: 'Examens', icon: ClipboardList },
-                { id: 'results', label: 'Résultats', icon: History },
-                { id: 'groups', label: 'Groupes', icon: Users },
-                { id: 'filieres', label: 'Filières', icon: Database },
-                { id: 'system', label: 'Système', icon: Database },
-                { id: 'ai', label: 'Assistant IA', icon: Sparkles },
-                { id: 'settings', label: 'Paramètres', icon: Settings },
-              ].map((item, idx) => (
-                <motion.button
-                  key={item.id}
-                  initial={{ opacity: 0, x: -10 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: idx * 0.05 }}
-                  onClick={() => setActiveTab(item.id as any)}
-                  className={cn(
-                    "w-full flex items-center gap-4 px-5 py-4 rounded-2xl text-sm font-bold transition-all relative group",
-                    activeTab === item.id 
-                      ? "bg-indigo-600 text-white shadow-xl shadow-indigo-200 translate-x-2" 
-                      : "text-slate-500 hover:bg-slate-50 hover:text-indigo-600"
-                  )}
-                >
-                  <item.icon className={cn("w-5 h-5", activeTab === item.id ? "text-white" : "text-slate-400 group-hover:text-indigo-600")} />
-                  {item.label}
-                  {activeTab === item.id && (
-                    <motion.div layoutId="active-tab" className="absolute left-[-1.5rem] w-1.5 h-6 bg-indigo-600 rounded-r-full" />
-                  )}
-                </motion.button>
-              ))}
-            </nav>
+        <div className="sticky top-10 space-y-10">
+          <div className="space-y-8">
+            {navGroups.map((group, groupIdx) => (
+              <div key={group.title} className="px-2">
+                <h3 className="text-[9px] font-black text-slate-300 uppercase tracking-[0.25em] mb-4 ml-4">{group.title}</h3>
+                <nav className="space-y-1.5">
+                  {group.items.map((item, idx) => (
+                    <motion.button
+                      key={item.id}
+                      initial={{ opacity: 0, x: -20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ 
+                        delay: (groupIdx * 10 + idx) * 0.03,
+                        type: "spring",
+                        stiffness: 260,
+                        damping: 20 
+                      }}
+                      whileHover={{ x: 8 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={() => setActiveTab(item.id as any)}
+                      className={cn(
+                        "w-full flex items-center gap-4 px-5 py-4 rounded-2xl text-sm font-bold transition-all relative group",
+                        activeTab === item.id 
+                          ? "bg-indigo-600 text-white shadow-xl shadow-indigo-200" 
+                          : "text-slate-500 hover:bg-slate-50 hover:text-indigo-600"
+                      )}
+                    >
+                      <item.icon className={cn("w-5 h-5 transition-transform duration-500 group-hover:rotate-12", activeTab === item.id ? "text-white" : "text-slate-400 group-hover:text-indigo-600")} />
+                      <span className="truncate">{item.label}</span>
+                      {activeTab === item.id && (
+                        <motion.div 
+                          layoutId="active-tab" 
+                          className="absolute left-[-1.5rem] w-1.5 h-6 bg-indigo-600 rounded-r-full"
+                          transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                        />
+                      )}
+                    </motion.button>
+                  ))}
+                </nav>
+              </div>
+            ))}
           </div>
           
           {/* User Profile Card */}
@@ -504,546 +1012,54 @@ export const TeacherDashboard = ({
             transition={{ duration: 0.3 }}
           >
             {activeTab === 'overview' && (
-              <div className="space-y-12">
-                <div className="space-y-2">
-                  <h2 className="text-4xl font-black text-slate-900 tracking-tight font-serif italic">Bonjour, {user?.displayName || 'Enseignant'}</h2>
-                  <p className="text-slate-500 font-medium tracking-tight">Voici l'état actuel de vos cours et examens.</p>
-                </div>
-                
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
-                  {stats.map((stat, i) => (
-                    <motion.div
-                      key={i}
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: i * 0.1 }}
-                    >
-                      <StatCard title={stat.label} {...stat} />
-                    </motion.div>
-                  ))}
-                </div>
-
-                <div className="grid grid-cols-1 gap-10">
-                  <div className="xl:col-span-12 space-y-12">
-                    <section className="space-y-6">
-                      <div className="flex items-center justify-between">
-                        <h3 className="text-2xl font-black text-slate-900 tracking-tight">Vue d'ensemble de la classe</h3>
-                      </div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <Card className="p-8 border-2 border-slate-50 bg-white/50 backdrop-blur shadow-soft flex flex-col justify-center gap-6">
-                           <div className="flex items-center gap-4">
-                             <div className="w-12 h-12 rounded-2xl bg-emerald-50 flex items-center justify-center text-emerald-600 border border-emerald-100">
-                               <CheckCircle2 className="w-6 h-6" />
-                             </div>
-                             <div>
-                               <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Taux de réussite moyen</p>
-                               <h4 className="text-3xl font-black text-slate-900 tracking-tighter">
-                                 {results.length > 0 ? formatPercent((results.filter(r => (r.score / (r.totalPoints || 1)) >= 0.5).length / results.length) * 100) : 0}%
-                               </h4>
-                             </div>
-                           </div>
-                           <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
-                              <div 
-                                className="h-full bg-emerald-500 rounded-full" 
-                                style={{ width: `${results.length > 0 ? (results.filter(r => (r.score / (r.totalPoints || 1)) >= 0.5).length / results.length) * 100 : 0}%` }} 
-                              />
-                           </div>
-                        </Card>
-                        <Card className="p-8 border-2 border-slate-50 bg-white/50 backdrop-blur shadow-soft flex flex-col justify-center gap-6">
-                           <div className="flex items-center gap-4">
-                             <div className="w-12 h-12 rounded-2xl bg-indigo-50 flex items-center justify-center text-indigo-600 border border-indigo-100">
-                               <Target className="w-6 h-6" />
-                             </div>
-                             <div>
-                               <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Moyenne Globale</p>
-                               <h4 className="text-3xl font-black text-slate-900 tracking-tighter">
-                                 {results.length > 0 ? formatPercent(results.reduce((acc, r) => acc + (r.score / (r.totalPoints || 1)), 0) / results.length * 100) : 0}%
-                               </h4>
-                             </div>
-                           </div>
-                           <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
-                              <div 
-                                className="h-full bg-indigo-500 rounded-full" 
-                                style={{ width: `${results.length > 0 ? results.reduce((acc, r) => acc + (r.score / (r.totalPoints || 1)), 0) / results.length * 100 : 0}%` }} 
-                              />
-                           </div>
-                        </Card>
-                      </div>
-                    </section>
-
-                    <section className="space-y-6">
-                      <div className="flex items-center justify-between">
-                        <h3 className="text-2xl font-black text-slate-900 tracking-tight">Derniers Résultats Étudiants</h3>
-                        <div className="w-10 h-10 rounded-xl bg-slate-50 flex items-center justify-center">
-                          <History className="w-5 h-5 text-slate-300" />
-                        </div>
-                      </div>
-                      <div className="bg-white rounded-[2.5rem] border-2 border-slate-100 shadow-soft overflow-hidden">
-                        <div className="overflow-x-auto">
-                          <table className="w-full">
-                            <thead>
-                              <tr className="bg-slate-50/50 border-b-2 border-slate-100 font-display">
-                                <th className="px-8 py-5 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Étudiant</th>
-                                <th className="px-8 py-5 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Examen</th>
-                                <th className="px-8 py-5 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest">Score</th>
-                                <th className="px-8 py-5 text-right text-[10px] font-black text-slate-400 uppercase tracking-widest">Date</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y-2 divide-slate-50">
-                              {results.length === 0 ? (
-                                <tr>
-                                  <td colSpan={4} className="px-8 py-10 text-center text-slate-400 font-bold">Aucun résultat enregistré.</td>
-                                </tr>
-                              ) : (
-                                results.sort((a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime()).slice(0, 5).map(result => {
-                                  const exam = exams.find(e => e.id === result.examId);
-                                  const percentage = Math.round((result.score / (result.totalPoints || 1)) * 100);
-                                  return (
-                                    <tr key={result.id} className="group hover:bg-slate-50/50 transition-colors">
-                                      <td className="px-8 py-5">
-                                        <div className="flex items-center gap-3">
-                                          <div className="w-8 h-8 rounded-lg bg-indigo-50 flex items-center justify-center text-[10px] font-black text-indigo-600">
-                                            {result.studentName?.[0] || 'S'}
-                                          </div>
-                                          <span className="font-bold text-slate-700">{result.studentName}</span>
-                                        </div>
-                                      </td>
-                                      <td className="px-8 py-5">
-                                        <div className="space-y-0.5">
-                                          <p className="font-black text-slate-900 group-hover:text-indigo-600 transition-colors uppercase tracking-tight text-xs">{exam?.title || 'Examen inconnu'}</p>
-                                          <div className="flex items-center gap-2">
-                                            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">
-                                              {modules.find(m => m.id === exam?.moduleId)?.name}
-                                            </p>
-                                            {exam?.type && (
-                                              <span className={cn(
-                                                "text-[8px] font-black px-1.5 py-0.5 rounded uppercase tracking-widest",
-                                                exam.type === 'fin-de-module' ? "bg-purple-50 text-purple-600" : "bg-blue-50 text-blue-600"
-                                              )}>
-                                                {exam.type === 'fin-de-module' ? 'EFM' : 'CC'}
-                                              </span>
-                                            )}
-                                          </div>
-                                        </div>
-                                      </td>
-                                      <td className="px-8 py-5">
-                                        <div className="flex flex-col items-center">
-                                          <div className={cn(
-                                            "px-2.5 py-1 rounded-lg text-[10px] font-black flex items-center gap-1.5",
-                                            percentage >= 80 ? "bg-emerald-50 text-emerald-600 border border-emerald-100" : percentage >= 50 ? "bg-amber-50 text-amber-600 border border-amber-100" : "bg-rose-50 text-rose-600 border border-rose-100"
-                                          )}>
-                                            {formatScore(result.score)} / {result.totalPoints}
-                                          </div>
-                                        </div>
-                                      </td>
-                                      <td className="px-8 py-5 text-right">
-                                        <span className="text-[10px] font-bold text-slate-400 uppercase">{new Date(result.completedAt).toLocaleDateString()}</span>
-                                      </td>
-                                    </tr>
-                                  );
-                                })
-                              )}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    </section>
-
-                    <section className="space-y-6">
-                      <div className="flex items-center justify-between">
-                        <h3 className="text-2xl font-black text-slate-900 tracking-tight">Examens Récents</h3>
-                        <Button variant="ghost" size="sm" onClick={() => setActiveTab('exams')} className="text-indigo-600 font-black text-[10px] uppercase tracking-widest hover:bg-indigo-50">Voir tout</Button>
-                      </div>
-                      <div className="grid grid-cols-1 gap-6">
-                        {exams.length === 0 ? (
-                          <EmptyState message="Aucun examen créé pour le moment." />
-                        ) : (
-                          exams.slice(0, 3).map(exam => {
-                            const module = modules.find(m => m.id === exam.moduleId);
-                            return (
-                              <Card key={exam.id} className="p-6 flex flex-col md:flex-row md:items-center justify-between group border-2 border-slate-100 hover:border-indigo-100 transition-all duration-300 rounded-[2rem] hover:shadow-xl hover:shadow-slate-200/50">
-                                <div className="flex items-center gap-6">
-                                  <div className="w-14 h-14 rounded-2xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 shrink-0 group-hover:scale-110 group-hover:rotate-3 transition-all duration-500">
-                                    <ClipboardList className="w-7 h-7" />
-                                  </div>
-                                  <div className="space-y-1">
-                                    <h4 className="font-black text-slate-900 group-hover:text-indigo-600 transition-colors uppercase tracking-tight text-lg">{exam.title}</h4>
-                                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-                                      <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">
-                                        {module?.name}
-                                      </p>
-                                      <span className="w-1 h-1 rounded-full bg-slate-200 hidden sm:block" />
-                                      <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest flex items-center gap-1.5">
-                                        <Clock className="w-3 h-3" /> {formatDuration(exam.durationMinutes)}
-                                      </p>
-                                      <span className="w-1 h-1 rounded-full bg-slate-200 hidden sm:block" />
-                                      <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest flex items-center gap-1.5">
-                                        <ClipboardList className="w-3 h-3" /> {exam.questions.length} questions
-                                      </p>
-                                      {exam.type && (
-                                        <div className={cn(
-                                          "px-2 py-0.5 rounded-lg text-[9px] font-black uppercase tracking-widest border shadow-sm",
-                                          exam.type === 'fin-de-module' ? "bg-purple-50 text-purple-600 border-purple-100" : "bg-blue-50 text-blue-600 border-blue-100"
-                                        )}>
-                                          {exam.type === 'fin-de-module' ? 'Fin de Module' : 'Contrôle Continu'}
-                                        </div>
-                                      )}
-                                    </div>
-                                  </div>
-                                </div>
-
-                                <div className="flex items-center justify-between md:justify-end gap-6 mt-6 md:mt-0 pt-6 md:pt-0 border-t md:border-t-0 border-slate-50">
-                                  <div className="flex flex-col items-end gap-2">
-                                    <span className={cn(
-                                      "text-[9px] font-black px-3 py-1 rounded-full uppercase tracking-widest border transition-all shadow-sm",
-                                      exam.status === 'active' ? "bg-emerald-50 text-emerald-600 border-emerald-100" : "bg-slate-50 text-slate-400 border-slate-100"
-                                    )}>
-                                      {exam.status === 'active' ? 'En Ligne' : 'Brouillon'}
-                                    </span>
-                                    <button 
-                                      type="button"
-                                      onClick={(e) => { e.stopPropagation(); toggleExamStatus(exam); }}
-                                      disabled={togglingExamId === exam.id}
-                                      className={cn(
-                                        "w-12 h-6 rounded-full p-1 transition-all duration-500 relative focus:outline-none shadow-sm",
-                                        exam.status === 'active' ? "bg-emerald-500 shadow-emerald-500/20" : "bg-slate-200",
-                                        togglingExamId === exam.id && "opacity-50 cursor-not-allowed"
-                                      )}
-                                    >
-                                      <div className={cn(
-                                        "w-4 h-4 rounded-full bg-white shadow-md transition-transform duration-500 transform flex items-center justify-center",
-                                        exam.status === 'active' ? "translate-x-6" : "translate-x-0"
-                                      )}>
-                                        {togglingExamId === exam.id && (
-                                          <div className="w-2 h-2 border-[1.5px] border-indigo-600/20 border-t-indigo-600 rounded-full animate-spin" />
-                                        )}
-                                      </div>
-                                    </button>
-                                  </div>
-
-                                  <div className="flex items-center gap-1 bg-slate-50/50 p-1 rounded-2xl border border-slate-100">
-                                    <div className="flex">
-                                      <Button variant="ghost" size="sm" onClick={() => handleExportPDF(exam, false)} className="h-10 w-10 p-0 text-slate-400 hover:text-indigo-600 hover:bg-white rounded-xl transition-all" title="PDF">
-                                        <FileDown className="w-4 h-4" />
-                                      </Button>
-                                      <Button variant="ghost" size="sm" onClick={() => handleExportWord(exam, false)} className="h-10 w-10 p-0 text-slate-400 hover:text-blue-600 hover:bg-white rounded-xl transition-all" title="Word">
-                                        <FileText className="w-4 h-4" />
-                                      </Button>
-                                    </div>
-                                    <div className="w-px h-5 bg-slate-200 self-center mx-1" />
-                                    <div className="flex gap-1">
-                                      <Button variant="ghost" size="sm" onClick={() => setPreviewExam(exam)} className="h-10 w-10 p-0 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-all" title="Aperçu">
-                                        <Eye className="w-4.5 h-4.5" />
-                                      </Button>
-                                      <Button variant="ghost" size="sm" onClick={() => setEditingExam(exam)} className="h-10 w-10 p-0 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-xl transition-all" title="Modifier">
-                                        <Edit2 className="w-4.5 h-4.5" />
-                                      </Button>
-                                      {results.filter(r => r.examId === exam.id).length === 0 && (
-                                        <Button 
-                                          variant="ghost" 
-                                          size="sm" 
-                                          onClick={(e) => handleDeleteExam(e, exam.id)} 
-                                          className={cn(
-                                            "h-10 p-0 transition-all rounded-xl",
-                                            deletingExamId === exam.id 
-                                              ? "w-auto px-4 bg-rose-600 text-white hover:bg-rose-700" 
-                                              : "w-10 text-slate-400 hover:text-rose-600 hover:bg-rose-50"
-                                          )} 
-                                          title={deletingExamId === exam.id ? "Confirmer la suppression" : "Supprimer"}
-                                        >
-                                          {deletingExamId === exam.id ? (
-                                            <span className="text-[10px] font-black uppercase tracking-widest whitespace-nowrap flex items-center gap-2">
-                                              <Trash2 className="w-3.5 h-3.5" />
-                                              Confirmer
-                                            </span>
-                                          ) : (
-                                            <Trash2 className="w-4.5 h-4.5" />
-                                          )}
-                                        </Button>
-                                      )}
-                                    </div>
-                                  </div>
-                                </div>
-                              </Card>
-                            );
-                          })
-                        )}
-                      </div>
-                    </section>
-                  </div>
-                </div>
-              </div>
+              <StatisticsTab
+                user={user}
+                modules={modules}
+                exams={exams}
+                results={results}
+                studentCount={studentCount}
+                toggleExamStatus={toggleExamStatus}
+                togglingExamId={togglingExamId}
+                setActiveTab={setActiveTab}
+              />
             )}
 
             {activeTab === 'modules' && (
-              <div className="space-y-8">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h2 className="text-3xl font-black text-slate-900 font-serif italic tracking-tight">Gestion des Modules</h2>
-                    <p className="text-slate-500 mt-1">Créez et gérez vos modules d'enseignement.</p>
-                  </div>
-                  <Button onClick={() => setIsAddingModule(true)} className="gap-2 text-xs uppercase tracking-widest font-black py-4 px-6 shadow-xl shadow-indigo-100">
-                    <Plus className="w-4 h-4" /> Nouveau Module
-                  </Button>
-                </div>
-                
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {modules.length === 0 ? (
-                    <div className="col-span-full"><EmptyState message="Commencez par créer votre premier module." /></div>
-                  ) : (
-                    modules.map((module, index) => (
-                      <motion.div
-                        key={module.id}
-                        initial={{ opacity: 0, scale: 0.9 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        transition={{ delay: index * 0.05 }}
-                      >
-                        <Card className="p-1 group overflow-hidden border-2 border-slate-50 hover:border-indigo-100 transition-all duration-500 hover:shadow-2xl hover:shadow-slate-200/50">
-                          <div className="p-6 bg-white rounded-[1.75rem] h-full flex flex-col group-hover:bg-slate-50/50">
-                            <div className="flex items-center justify-between mb-4">
-                              <div className="w-12 h-12 rounded-2xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 group-hover:scale-110 group-hover:rotate-6 transition-all">
-                                <BookOpen className="w-6 h-6" />
-                              </div>
-                              <div className="flex items-center gap-1">
-                                <Button variant="ghost" size="sm" onClick={() => setEditingModule(module)} className="text-slate-400 hover:text-indigo-600 h-10 w-10 p-0 rounded-xl"><Edit2 className="w-4 h-4" /></Button>
-                                <Button variant="ghost" size="sm" onClick={() => handleDeleteModule(module.id)} className="text-slate-400 hover:text-rose-600 h-10 w-10 p-0 rounded-xl"><Trash2 className="w-4 h-4" /></Button>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-2 mb-2">
-                                <span className="px-2 py-0.5 bg-indigo-50 text-indigo-600 text-[10px] font-black rounded-lg uppercase tracking-widest border border-indigo-100">{module.code}</span>
-                                <span className="px-2 py-0.5 bg-slate-50 text-slate-500 text-[10px] font-black rounded-lg uppercase tracking-widest border border-slate-100">{module.durationHours}H</span>
-                            </div>
-                            <h4 className="text-xl font-black text-slate-900 group-hover:text-indigo-600 transition-colors uppercase tracking-tight mb-2">{module.name}</h4>
-                            <div className="text-xs text-slate-500 line-clamp-3 mb-6 font-medium leading-relaxed" dangerouslySetInnerHTML={{ __html: module.description }} />
-                            <div className="mt-auto pt-6 border-t border-slate-100 flex items-center justify-between text-[10px] font-black uppercase tracking-widest text-slate-400">
-                               <span>{filieres.find(f => f.id === module.filiereId)?.name || 'Toutes filières'}</span>
-                               <span className="flex items-center gap-1.5"><History className="w-3 h-3" /> {new Date(module.createdAt).toLocaleDateString()}</span>
-                            </div>
-                          </div>
-                        </Card>
-                      </motion.div>
-                    ))
-                  )}
-                </div>
-              </div>
+              <ModulesTab
+                modules={modules}
+                exams={exams}
+                results={results}
+                filieres={filieres}
+                orgSettings={orgSettings}
+                isExportingPV={isExportingPV}
+                setIsAddingModule={setIsAddingModule}
+                setEditingModule={setEditingModule}
+                handleExportModuleExcel={handleExportModuleExcel}
+                handleDeleteModule={handleDeleteModule}
+                handleExportPV={handleExportPV}
+              />
             )}
 
             {activeTab === 'exams' && (
-              <div className="space-y-8">
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-                  <div>
-                    <h2 className="text-3xl font-black text-slate-900 font-serif italic tracking-tight">Examens</h2>
-                    <p className="text-slate-500 mt-1">Gérez vos évaluations et suivez les progrès.</p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <div className="relative">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-300" />
-                      <input 
-                        type="text" 
-                        placeholder="Rechercher..." 
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        className="w-48 pl-9 pr-4 py-2.5 bg-slate-50 border-2 border-transparent focus:border-indigo-500/20 focus:bg-white rounded-xl text-xs font-bold transition-all outline-none"
-                      />
-                    </div>
-                    <Button onClick={() => setIsAddingExam(true)} className="gap-2 text-xs uppercase tracking-widest font-black py-4 px-6 shadow-xl shadow-indigo-100">
-                      <Plus className="w-4 h-4" /> Créer un Examen
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="bg-white p-4 rounded-3xl border border-slate-100 flex items-center gap-4">
-                  <div className="flex items-center gap-2 px-4 border-r border-slate-100">
-                    <Filter className="w-4 h-4 text-slate-400" />
-                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Trier par</span>
-                  </div>
-                  <select 
-                    value={sortBy}
-                    onChange={(e) => setSortBy(e.target.value as any)}
-                    className="bg-transparent text-xs font-bold text-slate-600 focus:outline-none cursor-pointer"
-                  >
-                    <option value="createdAt">Date de création</option>
-                    <option value="title">Titre (A-Z)</option>
-                  </select>
-                </div>
-
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                  {filteredExams.length === 0 ? (
-                    <div className="col-span-full"><EmptyState message="Aucun examen trouvé." /></div>
-                  ) : (
-                    filteredExams.map(exam => {
-                      const examResults = results.filter(r => r.examId === exam.id);
-                      const module = modules.find(m => m.id === exam.moduleId);
-                      
-                      return (
-                        <motion.div
-                          key={exam.id}
-                          initial={{ opacity: 0, y: 20 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          className="group"
-                        >
-                          <Card className="h-full flex flex-col p-0 border-2 border-slate-100 hover:border-indigo-100 transition-all duration-500 overflow-hidden rounded-[2.5rem] hover:shadow-2xl hover:shadow-indigo-500/10">
-                            {/* Card Header Background */}
-                            <div className="h-2 bg-indigo-500 w-full" />
-                            
-                            <div className="p-6 flex flex-col flex-1">
-                              <div className="flex justify-between items-start mb-4">
-                                <div className="space-y-1 max-w-[70%]">
-                                  <div className="flex items-center gap-2">
-                                    <div className={cn(
-                                      "w-2 h-2 rounded-full",
-                                      exam.status === 'active' ? "bg-emerald-500 animate-pulse" : "bg-slate-300"
-                                    )} />
-                                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">{module?.name}</p>
-                                  </div>
-                                  <h4 className="text-lg font-black text-slate-900 group-hover:text-indigo-600 transition-colors leading-tight uppercase tracking-tight line-clamp-2">
-                                    {exam.title}
-                                  </h4>
-                                </div>
-                                <div className="flex flex-col items-end gap-2">
-                                  <span className={cn(
-                                    "px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border transition-all duration-300 shadow-sm",
-                                    exam.status === 'active' 
-                                      ? "bg-emerald-50 text-emerald-600 border-emerald-100" 
-                                      : "bg-slate-50 text-slate-400 border-slate-100"
-                                  )}>
-                                    {exam.status === 'active' ? 'En Ligne' : 'Brouillon'}
-                                  </span>
-                                  <button 
-                                    type="button"
-                                    onClick={(e) => { e.stopPropagation(); toggleExamStatus(exam); }}
-                                    disabled={togglingExamId === exam.id}
-                                    className={cn(
-                                      "w-12 h-6 rounded-full p-1 transition-all duration-500 relative focus:outline-none shadow-sm",
-                                      exam.status === 'active' ? "bg-emerald-500 shadow-emerald-500/20" : "bg-slate-200",
-                                      togglingExamId === exam.id && "opacity-50 cursor-not-allowed"
-                                    )}
-                                  >
-                                    <div className={cn(
-                                      "w-4 h-4 rounded-full bg-white shadow-md transition-transform duration-500 transform flex items-center justify-center",
-                                      exam.status === 'active' ? "translate-x-6" : "translate-x-0"
-                                    )}>
-                                      {togglingExamId === exam.id && (
-                                        <div className="w-2 h-2 border-[1.5px] border-indigo-600/20 border-t-indigo-600 rounded-full animate-spin" />
-                                      )}
-                                    </div>
-                                  </button>
-                                </div>
-                              </div>
-
-                              <div className="flex flex-wrap gap-2 mb-6">
-                                <div className="bg-slate-50 border border-slate-100 rounded-xl px-2.5 py-1.5 flex items-center gap-2">
-                                  <Clock className="w-3.5 h-3.5 text-slate-400" />
-                                  <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{formatDuration(exam.durationMinutes)}</span>
-                                </div>
-                                <div className="bg-slate-50 border border-slate-100 rounded-xl px-2.5 py-1.5 flex items-center gap-2">
-                                  <ClipboardList className="w-3.5 h-3.5 text-slate-400" />
-                                  <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{exam.questions.length} Qs</span>
-                                </div>
-                                {exam.type && (
-                                  <div className={cn(
-                                    "rounded-xl px-2.5 py-1.5 flex items-center gap-2 border shadow-sm transition-all",
-                                    exam.type === 'fin-de-module' ? "bg-purple-50 border-purple-100 text-purple-600" : "bg-blue-50 border-blue-100 text-blue-600"
-                                  )}>
-                                    <Target className="w-3.5 h-3.5" />
-                                    <span className="text-[10px] font-black uppercase tracking-widest">
-                                      {exam.type === 'fin-de-module' ? 'EFM' : 'CC'}
-                                    </span>
-                                  </div>
-                                )}
-                                {exam.groupName && (
-                                  <div className="bg-indigo-50/50 border border-indigo-100 rounded-xl px-2.5 py-1.5 flex items-center gap-2">
-                                    <Users className="w-3.5 h-3.5 text-indigo-400" />
-                                    <span className="text-[10px] font-black text-indigo-600 uppercase tracking-widest">{exam.groupName}</span>
-                                  </div>
-                                )}
-                                {examResults.length > 0 && (
-                                  <div className="bg-emerald-50/50 border border-emerald-100 rounded-xl px-2.5 py-1.5 flex items-center gap-2">
-                                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                                    <span className="text-[10px] font-black text-emerald-600 uppercase tracking-widest">{examResults.length} Terminés</span>
-                                  </div>
-                                )}
-                              </div>
-
-                              <div className="mt-auto space-y-4">
-                                <div className="pt-4 border-t-2 border-slate-50 flex flex-wrap items-center justify-between gap-4">
-                                  <div className="flex bg-slate-50 border border-slate-100 p-1 rounded-2xl shrink-0">
-                                    <div className="flex">
-                                      <Button variant="ghost" size="sm" onClick={() => handleExportPDF(exam, false)} className="h-8 w-8 p-0 text-slate-400 hover:text-indigo-600 hover:bg-white rounded-xl transition-all" title="PDF">
-                                        <FileDown className="w-3.5 h-3.5" />
-                                      </Button>
-                                      <Button variant="ghost" size="sm" onClick={() => handleExportWord(exam, false)} className="h-8 w-8 p-0 text-slate-400 hover:text-blue-600 hover:bg-white rounded-xl transition-all" title="Word">
-                                        <FileText className="w-3.5 h-3.5" />
-                                      </Button>
-                                    </div>
-                                    <div className="w-px h-3.5 bg-slate-200 self-center mx-1" />
-                                    <div className="flex">
-                                      <Button variant="ghost" size="sm" onClick={() => handleExportPDF(exam, true)} className="h-8 w-8 p-0 text-slate-400 hover:text-emerald-600 hover:bg-white rounded-xl transition-all" title="Corrigé PDF">
-                                        <CheckCircle2 className="w-3.5 h-3.5" />
-                                      </Button>
-                                      <Button variant="ghost" size="sm" onClick={() => handleExportWord(exam, true)} className="h-8 w-8 p-0 text-slate-400 hover:text-emerald-500 hover:bg-white rounded-xl transition-all" title="Corrigé Word">
-                                        <Sparkles className="w-3.5 h-3.5" />
-                                      </Button>
-                                    </div>
-                                    {examResults.length > 0 && (
-                                      <>
-                                        <div className="w-px h-3.5 bg-slate-200 self-center mx-1" />
-                                        <Button variant="ghost" size="sm" onClick={() => handleExportResultsPDF(exam)} className="h-8 w-8 p-0 text-violet-500 hover:bg-white rounded-xl transition-all" title="Exporter les Résultats (PDF)">
-                                          <Users className="w-3.5 h-3.5" />
-                                        </Button>
-                                      </>
-                                    )}
-                                  </div>
-
-                                  <div className="flex items-center gap-1">
-                                    <Button variant="ghost" size="sm" onClick={() => setPerformanceExam(exam)} className="h-9 w-9 p-0 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-xl transition-all" title="Performance">
-                                      <BarChart className="w-4 h-4" />
-                                    </Button>
-                                    <Button variant="ghost" size="sm" onClick={() => setPreviewExam(exam)} className="h-9 w-9 p-0 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-all" title="Aperçu">
-                                      <Eye className="w-4 h-4" />
-                                    </Button>
-                                    <Button variant="ghost" size="sm" onClick={() => setEditingExam(exam)} className="h-9 w-9 p-0 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-xl transition-all" title="Modifier">
-                                      <Edit2 className="w-4 h-4" />
-                                    </Button>
-                                    {examResults.length === 0 && (
-                                      <Button 
-                                        variant="ghost" 
-                                        size="sm" 
-                                        onClick={(e) => handleDeleteExam(e, exam.id)} 
-                                        className={cn(
-                                          "h-9 p-0 transition-all rounded-xl",
-                                          deletingExamId === exam.id 
-                                            ? "w-auto px-3 bg-rose-600 text-white hover:bg-rose-700" 
-                                            : "w-9 text-slate-400 hover:text-rose-600 hover:bg-rose-50"
-                                        )} 
-                                        title={deletingExamId === exam.id ? "Confirmer la suppression" : "Supprimer"}
-                                      >
-                                        {deletingExamId === exam.id ? (
-                                          <span className="text-[9px] font-black uppercase tracking-widest whitespace-nowrap flex items-center gap-1.5">
-                                            <Trash2 className="w-3 h-3" />
-                                            Confirmer
-                                          </span>
-                                        ) : (
-                                          <Trash2 className="w-4 h-4" />
-                                        )}
-                                      </Button>
-                                    )}
-                                  </div>
-                                </div>
-                                <div className="flex items-center justify-center">
-                                  <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">
-                                    Créé le {new Date(exam.createdAt).toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' })}
-                                  </span>
-                                </div>
-                              </div>
-                            </div>
-                          </Card>
-                        </motion.div>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
+              <ExamsTab
+                exams={exams}
+                modules={modules}
+                results={results}
+                setIsAddingExam={setIsAddingExam}
+                setEditingExam={setEditingExam}
+                setPreviewExam={setPreviewExam}
+                setSupervisingExam={setSupervisingExam}
+                setPerformanceExam={setPerformanceExam}
+                toggleExamStatus={toggleExamStatus}
+                togglingExamId={togglingExamId}
+                handleDuplicateExam={handleDuplicateExam}
+                duplicatingExamId={duplicatingExamId}
+                handleDeleteExam={handleDeleteExam}
+                deletingExamId={deletingExamId}
+                handleExportPDF={handleExportPDF}
+                handleExportWord={handleExportWord}
+                handleExportResultsPDF={handleExportResultsPDF}
+              />
             )}
 
             {activeTab === 'results' && (
@@ -1053,7 +1069,41 @@ export const TeacherDashboard = ({
                     <h2 className="text-3xl font-black text-slate-900 font-serif italic tracking-tight">Gestion des Résultats</h2>
                     <p className="text-slate-500 mt-1">Consultez et exportez les performances de tous vos étudiants.</p>
                   </div>
-                  <div className="flex items-center gap-3">
+                </div>
+
+                {statsCards}
+
+                <div className="flex items-center gap-3">
+                  <div className="relative hidden md:block">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-300" />
+                      <input 
+                        type="text" 
+                        placeholder="Rechercher un étudiant..." 
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        className="w-48 pl-9 pr-4 py-2.5 bg-slate-50 border-2 border-transparent focus:border-indigo-500/20 focus:bg-white rounded-xl text-[10px] font-black uppercase tracking-widest transition-all outline-none"
+                      />
+                    </div>
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      onClick={() => {
+                        const csvData = results.map(r => ({
+                          'Étudiant': r.studentName,
+                          'Examen': exams.find(e => e.id === r.examId)?.title,
+                          'Score': r.score,
+                          'Total': r.totalPoints,
+                          'Pourcentage': ((r.score / (r.totalPoints || 1)) * 100).toFixed(2) + '%',
+                          'Date': new Date(r.completedAt).toLocaleString()
+                        }));
+                        const csvString = Papa.unparse(csvData);
+                        const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+                        saveAs(blob, `Resultats_Complets_${new Date().toISOString().slice(0,10)}.csv`);
+                      }}
+                      className="h-10 px-4 gap-2 text-[10px] font-black uppercase tracking-widest hidden sm:flex border-2 border-slate-100 hover:border-indigo-100 rounded-xl transition-all"
+                    >
+                      <FileDown className="w-4 h-4" /> CSV
+                    </Button>
                     <div className="flex bg-slate-100 p-1 rounded-xl">
                       <button 
                         onClick={() => { setResultsViewMode('by-exam'); setSelectedExamId(null); }}
@@ -1075,7 +1125,6 @@ export const TeacherDashboard = ({
                       </button>
                     </div>
                   </div>
-                </div>
 
                 {resultsViewMode === 'by-exam' && !selectedExamId ? (
                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -1150,6 +1199,17 @@ export const TeacherDashboard = ({
                         {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
                       </select>
 
+                      <select 
+                        value={resultsFilterScore}
+                        onChange={(e) => { setResultsFilterScore(e.target.value); setResultsPage(1); }}
+                        className="bg-slate-50 border-none rounded-xl px-4 py-2 text-xs font-bold text-slate-600 focus:ring-2 focus:ring-indigo-500/20 outline-none cursor-pointer"
+                      >
+                        <option value="all">Toutes les performances</option>
+                        <option value="excellent">Excellents (≥ 80%)</option>
+                        <option value="average">Moyens (50% - 79%)</option>
+                        <option value="fail">En difficulté (&lt; 50%)</option>
+                      </select>
+
                       {selectedExamId && (
                         <Button 
                           variant="outline" 
@@ -1164,19 +1224,19 @@ export const TeacherDashboard = ({
 
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                        <Card className="p-6 bg-indigo-50/50 border-none">
-                         <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-2">Total Examens Terminés</p>
-                         <h4 className="text-3xl font-black text-indigo-900">{results.length}</h4>
+                         <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-2">Copies selectionnées</p>
+                         <h4 className="text-3xl font-black text-indigo-900">{filteredResultsStats.total} / {results.length}</h4>
                        </Card>
                        <Card className="p-6 bg-emerald-50/50 border-none">
-                         <p className="text-[10px] font-black text-emerald-400 uppercase tracking-widest mb-2">Taux de Réussite Global</p>
+                         <p className="text-[10px] font-black text-emerald-400 uppercase tracking-widest mb-2">Taux de Réussite filtré</p>
                          <h4 className="text-3xl font-black text-emerald-900">
-                           {results.length > 0 ? formatPercent((results.filter(r => (r.score / (r.totalPoints || 1)) >= 0.5).length / results.length) * 100) : 0}%
+                           {filteredResultsStats.successPercent}%
                          </h4>
                        </Card>
                        <Card className="p-6 bg-amber-50/50 border-none">
-                         <p className="text-[10px] font-black text-amber-400 uppercase tracking-widest mb-2">Moyenne de la Classe</p>
+                         <p className="text-[10px] font-black text-amber-400 uppercase tracking-widest mb-2">Moyenne filtrée</p>
                          <h4 className="text-3xl font-black text-amber-900">
-                            {results.length > 0 ? formatPercent((results.reduce((acc, r) => acc + (r.score / (r.totalPoints || 1)), 0) / results.length) * 100) : 0}%
+                            {filteredResultsStats.avgScore}%
                          </h4>
                        </Card>
                     </div>
@@ -1195,20 +1255,8 @@ export const TeacherDashboard = ({
                           </thead>
                           <tbody className="divide-y-2 divide-slate-50">
                             {(() => {
-                              const filteredResultsList = results
-                                .filter(r => {
-                                  const exam = exams.find(e => e.id === r.examId);
-                                  const matchesSearch = r.studentName?.toLowerCase().includes(searchQuery.toLowerCase());
-                                  const matchesExam = !selectedExamId || r.examId === selectedExamId;
-                                  const matchesModule = resultsFilterModule === 'all' || exam?.moduleId === Number(resultsFilterModule);
-                                  const matchesGroup = resultsFilterGroup === 'all' || r.groupName === groups.find(g => g.id === Number(resultsFilterGroup))?.name;
-                                  return matchesSearch && matchesExam && matchesModule && matchesGroup;
-                                })
-                                .sort((a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime());
-
-                              const startIndex = (resultsPage - 1) * resultsPerPage;
-                              const currentResults = filteredResultsList.slice(startIndex, startIndex + resultsPerPage);
-                              const totalPages = Math.ceil(filteredResultsList.length / resultsPerPage);
+                              const currentResults = sortedAndPaginatedResults.paginated;
+                              const totalPages = sortedAndPaginatedResults.totalPages;
 
                               if (currentResults.length === 0) {
                                 return (
@@ -1267,10 +1315,10 @@ export const TeacherDashboard = ({
                                             <Button 
                                               variant="ghost" 
                                               size="sm" 
-                                              onClick={() => setPerformanceExam(exam)}
-                                              className="text-indigo-600 hover:bg-indigo-50 gap-2"
+                                              onClick={() => setViewingResult(result)}
+                                              className="text-indigo-600 hover:bg-indigo-50 gap-2 font-black text-[10px] uppercase tracking-widest"
                                             >
-                                              <Eye className="w-4 h-4" /> Analyse
+                                              <Eye className="w-4 h-4" /> Détails
                                             </Button>
                                           )}
                                         </td>
@@ -1381,55 +1429,23 @@ export const TeacherDashboard = ({
             )}
 
             {activeTab === 'ai' && (
-              <div className="space-y-8">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h2 className="text-3xl font-black text-slate-900 font-serif italic tracking-tight">Assistant IA Pédagogique</h2>
-                    <p className="text-slate-500 mt-1">Générez du contenu pédagogique de haute qualité instantanément.</p>
-                  </div>
-                </div>
-                
-                <Card className="p-0 border-none shadow-2xl overflow-hidden bg-slate-900 text-white rounded-[2.5rem]">
-                  <div className="p-8 md:p-12 space-y-8">
-                    <div className="flex items-center gap-6">
-                      <div className="w-16 h-16 rounded-2xl bg-indigo-500 flex items-center justify-center text-white shadow-xl shadow-indigo-500/20">
-                        <Sparkles className="w-8 h-8" />
-                      </div>
-                      <div>
-                        <h3 className="text-2xl font-black tracking-tight uppercase">Générateur de Questions</h3>
-                        <p className="text-indigo-300 font-medium">L'IA Gemini analyse votre sujet et propose des questions prêtes à l'emploi.</p>
-                      </div>
-                    </div>
-
-                    <div className="bg-white/5 p-8 rounded-3xl border border-white/10 space-y-6">
-                      <p className="text-sm text-white/70 italic">Note: Les questions générées ici peuvent être copiées ou utilisées pour créer un nouvel examen après validation.</p>
-                      <Button 
-                        onClick={() => setIsAddingExam(true)} 
-                        className="w-full md:w-auto bg-indigo-500 hover:bg-indigo-400 text-white font-black py-4 px-8 rounded-2xl flex items-center gap-3"
-                      >
-                        <Plus className="w-5 h-5" /> Créer un examen avec l'IA
-                      </Button>
-                    </div>
-                  </div>
-                  
-                  <div className="bg-indigo-600 p-8 flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                      <div className="flex -space-x-2">
-                        {[1,2,3].map(i => (
-                          <div key={i} className="w-8 h-8 rounded-full border-2 border-indigo-600 bg-indigo-400 flex items-center justify-center text-[10px] font-black">
-                            {i}
-                          </div>
-                        ))}
-                      </div>
-                      <span className="text-xs font-bold text-indigo-100">Plus de 1000 questions générées ce mois-ci</span>
-                    </div>
-                  </div>
-                </Card>
-              </div>
+              <AiAssistantView 
+                modules={modules} 
+                onRefresh={onRefresh} 
+                onSelectTab={setActiveTab} 
+              />
             )}
 
             {activeTab === 'settings' && (
-              <OrganizationSettingsView />
+              <OrganizationSettingsView onUpdate={setOrgSettings} />
+            )}
+
+            {activeTab === 'users' && (
+              <AdminUserManagement />
+            )}
+
+            {activeTab === 'audit' && (
+              <AuditLogsView />
             )}
           </motion.div>
         </AnimatePresence>
@@ -1458,6 +1474,13 @@ export const TeacherDashboard = ({
             moduleName={modules.find(m => m.id === previewExam.moduleId)?.name} 
           />
         )}
+        {supervisingExam && (
+          <LiveSupervisionModal 
+            exam={supervisingExam} 
+            onClose={() => setSupervisingExam(null)} 
+            moduleName={modules.find(m => m.id === supervisingExam.moduleId)?.name} 
+          />
+        )}
         {performanceExam && (
           <ExamPerformanceModal 
             exam={performanceExam} 
@@ -1468,6 +1491,13 @@ export const TeacherDashboard = ({
             settings={orgSettings}
           />
         )}
+        {viewingResult && (
+          <ResultDetailModal
+            result={viewingResult}
+            exam={exams.find(e => e.id === viewingResult.examId)!}
+            onClose={() => setViewingResult(null)}
+          />
+        )}
         {activatingExam && (
           <ActivateExamModal
             exam={activatingExam}
@@ -1476,8 +1506,16 @@ export const TeacherDashboard = ({
             onClose={() => setActivatingExam(null)}
           />
         )}
+        {isAddingNotification && (
+          <Modal title="Publier une Annonce" onClose={() => setIsAddingNotification(false)}>
+             <div className="p-5 sm:p-8">
+               <AddNotificationForm user={user} groups={groups} onComplete={() => { setIsAddingNotification(false); onRefresh(); }} />
+             </div>
+          </Modal>
+        )}
       </AnimatePresence>
-      {isExporting && (
+
+      {(isExporting || isExportingResults || isExportingPV) && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[9999] flex items-center justify-center">
           <div className="bg-white p-8 rounded-3xl shadow-2xl flex flex-col items-center gap-4">
             <div className="w-12 h-12 border-4 border-indigo-600/20 border-t-indigo-600 rounded-full animate-spin" />
@@ -1498,6 +1536,7 @@ export const TeacherDashboard = ({
             groupName={exportData.groupName}
             showAnswers={exportData.showAnswers}
             settings={orgSettings}
+            teacherName={user.displayName}
           />
         )}
 
@@ -1510,6 +1549,19 @@ export const TeacherDashboard = ({
             filiereName={resultsExportData.filiereName}
             filiereLevel={resultsExportData.filiereLevel}
             groupName={resultsExportData.groupName}
+            settings={orgSettings}
+          />
+        )}
+
+        {pvExportData && (
+          <PVExportTemplate 
+            ref={pvExportRef}
+            exam={pvExportData.exam}
+            results={pvExportData.results}
+            module={pvExportData.module}
+            filiereName={pvExportData.filiereName}
+            filiereLevel={pvExportData.filiereLevel}
+            groupName={pvExportData.groupName}
             settings={orgSettings}
           />
         )}

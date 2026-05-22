@@ -1,5 +1,5 @@
 import React from 'react';
-import { CheckCircle2, XCircle, MinusCircle, HelpCircle, ArrowLeft } from 'lucide-react';
+import { CheckCircle2, XCircle, MinusCircle, HelpCircle, ArrowLeft, Sparkles } from 'lucide-react';
 import { Modal } from '../ui/Modal';
 import { Exam, Result } from '../../types';
 import { cn, formatScore, formatPercent } from '../../lib/utils';
@@ -17,6 +17,25 @@ export const ResultDetailsModal = ({ exam, result, onClose }: ResultDetailsModal
   return (
     <Modal title={`Résultats : ${exam.title}`} onClose={onClose} maxWidth="max-w-4xl">
       <div className="flex flex-col h-full bg-slate-50/10">
+        {/* AI Insight Header */}
+        {(result.score / (result.totalPoints || 1)) < 1 && (
+          <div className="mx-5 sm:mx-8 mt-5 p-4 bg-indigo-50 border border-indigo-100 rounded-2xl flex items-start gap-4">
+            <div className="w-10 h-10 rounded-xl bg-white border border-indigo-200 flex items-center justify-center shrink-0">
+               <Sparkles className="w-5 h-5 text-indigo-600 animate-pulse" />
+            </div>
+            <div>
+              <p className="text-[10px] font-black text-indigo-600 uppercase tracking-widest mb-1">Analyse de l'IA Assistant</p>
+              <p className="text-xs font-medium text-slate-600 leading-relaxed italic">
+                {result.score / result.totalPoints >= 0.8 
+                  ? "Excellente performance ! Vous maîtrisez bien les concepts clés. Concentrez-vous sur les détails techniques pour atteindre la perfection." 
+                  : result.score / result.totalPoints >= 0.5
+                  ? "Bon travail, mais certains points méritent d'être revus. Analysez vos erreurs ci-dessous pour mieux comprendre les nuances du module."
+                  : "Attention, les fondamentaux ne semblent pas encore acquis. Je vous recommande de revoir le support de cours de ce module et de retenter l'exercice."}
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Header Stats */}
         <div className="p-5 sm:p-8 bg-white border-b border-slate-100 space-y-6">
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 sm:gap-6">

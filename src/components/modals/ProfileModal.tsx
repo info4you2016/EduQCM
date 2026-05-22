@@ -14,6 +14,7 @@ interface ProfileModalProps {
 
 export const ProfileModal = ({ user, onClose, onUpdate }: ProfileModalProps) => {
   const [displayName, setDisplayName] = useState(user.displayName);
+  const [registrationNumber, setRegistrationNumber] = useState(user.registrationNumber || '');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -30,7 +31,7 @@ export const ProfileModal = ({ user, onClose, onUpdate }: ProfileModalProps) => 
 
     setLoading(true);
     try {
-      const data: any = { displayName };
+      const data: any = { displayName, registrationNumber };
       if (password) data.password = password;
       
       const res = await api.auth.update(data);
@@ -59,6 +60,14 @@ export const ProfileModal = ({ user, onClose, onUpdate }: ProfileModalProps) => 
             onChange={(e) => setDisplayName(e.target.value)} 
             icon={User}
             required
+          />
+
+          <Input 
+            label="Numéro d'inscription (CEF)" 
+            value={registrationNumber} 
+            onChange={(e) => setRegistrationNumber(e.target.value)} 
+            icon={User}
+            placeholder="Ex: 2425..."
           />
           
           <div className="pt-4 border-t border-slate-100 space-y-4">

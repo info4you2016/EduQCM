@@ -54,6 +54,7 @@ export const api = {
     delete: (id: number) => request(`/exams/${id}`, { method: "DELETE" }),
     publish: (id: number, groupId: number) => request(`/exams/${id}/publish`, { method: "POST", body: JSON.stringify({ groupId }) }),
     unpublish: (id: number) => request(`/exams/${id}/unpublish`, { method: "POST" }),
+    timeSync: (id: number) => request(`/exams/${id}/time-sync`, { method: "POST" }),
   },
   results: {
     list: () => request("/results"),
@@ -61,6 +62,7 @@ export const api = {
   },
   students: {
     count: () => request("/students/count"),
+    bulkImport: (students: any[]) => request("/admin/bulk-import-students", { method: "POST", body: JSON.stringify({ students }) }),
   },
   notifications: {
     list: () => request("/notifications"),
@@ -72,6 +74,11 @@ export const api = {
   admin: {
     backup: () => "/api/admin/backup", // This returns the URL for download
     getStudentCount: () => request("/students/count"),
+    listUsers: () => request("/admin/users"),
+    createUser: (data: any) => request("/admin/users", { method: "POST", body: JSON.stringify(data) }),
+    deleteUser: (id: number) => request(`/admin/users/${id}`, { method: "DELETE" }),
+    updateUser: (id: number, data: any) => request(`/admin/users/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+    getLogs: () => request("/admin/logs"),
     restore: async (file: File) => {
       const formData = new FormData();
       formData.append("file", file);

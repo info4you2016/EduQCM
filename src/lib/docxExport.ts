@@ -4,6 +4,7 @@ import {
   Paragraph, 
   TextRun, 
   AlignmentType, 
+  Header,
   Footer, 
   Table, 
   TableRow, 
@@ -15,7 +16,8 @@ import {
   HeadingLevel,
   VerticalMergeType,
   ImageRun,
-  PageNumber
+  PageNumber,
+  LevelFormat
 } from "docx";
 import { saveAs } from "file-saver";
 import { Exam, Module, Question, OrganizationSettings } from "../types";
@@ -41,7 +43,8 @@ export const exportExamToWord = async (
   totalPoints: number, 
   showAnswers: boolean = false,
   settings?: OrganizationSettings | null,
-  filiereLevel?: string
+  filiereLevel?: string,
+  teacherName?: string
 ) => {
   const orgName = settings?.orgName || 'OFPPT';
   const orgNameArabic = settings?.orgNameArabic || 'مكتب التكوين المهني وإنعاش الشغل';
@@ -52,50 +55,295 @@ export const exportExamToWord = async (
   const regionName = settings?.regionName || 'ROYAUME DU MAROC';
   const academicYear = settings?.academicYear || '2024/2025';
 
-  let logoBuffer: Uint8Array | null = null;
+  const replaceVariables = (text: string) => {
+    if (!text) return '';
+    return text
+      .replace(/{{TITRE}}/g, exam.title || '')
+      .replace(/{{MODULE}}/g, module.name || '')
+      .replace(/{{PROF}}/g, teacherName || '')
+      .replace(/{{DATE}}/g, exam.scheduledAt ? new Date(exam.scheduledAt).toLocaleDateString('fr-FR') : new Date().toLocaleDateString('fr-FR'))
+      .replace(/{{GROUPE}}/g, groupName || '')
+      .replace(/{{DUREE}}/g, formatDuration(exam.durationMinutes))
+      .replace(/{{TYPE}}/g, exam.type === 'controle-continu' ? 'CC' : 'EFM')
+      .replace(/{{FILIERE}}/g, filiereName || '')
+      .replace(/{{ETABLISSEMENT}}/g, settings?.institutionName || 'INSTITUTION')
+      .replace(/{{DIRECTION}}/g, settings?.regionalDirection || 'DIRECTION RÉGIONALE')
+      .replace(/{{REGION}}/g, settings?.regionName || 'REGION')
+      .replace(/{{ANNEE_ACAD}}/g, settings?.academicYear || '2024/2025')
+      .replace(/{{CODE_ORG}}/g, settings?.orgSubName || 'ORG')
+      .replace(/{{ORG_AR}}/g, settings?.orgNameArabic || 'ORG AR')
+      .replace(/{{ORG_FR}}/g, settings?.orgNameFrench || 'ORG FR');
+  };
+
+  const footerTextRaw = settings?.footerText || `${orgName} / ${orgSubName} / ${module.code}`;
+  const footerText = replaceVariables(footerTextRaw);
+
+  let logoBufferLeft: Uint8Array | null = null;
+  let logoBufferRight: Uint8Array | null = null;
+  
   if (settings?.orgLogoUrl) {
-    logoBuffer = await fetchImageAsBuffer(settings.orgLogoUrl);
+    logoBufferLeft = await fetchImageAsBuffer(settings.orgLogoUrl);
+  }
+  if (settings?.orgLogoUrlRight) {
+    logoBufferRight = await fetchImageAsBuffer(settings.orgLogoUrlRight);
+  } else if (settings?.orgLogoUrl) {
+    logoBufferRight = logoBufferLeft; // Fallback to same logo if only one is provided
   }
 
-  const createLogoImage = () => {
-    if (!logoBuffer) return null;
+  const colLogoBuffers: Map<string, Uint8Array | null> = new Map();
+  if (settings?.headerColumns) {
+    for (const col of settings.headerColumns) {
+      for (const line of col.lines) {
+        if (line.type === 'image' && line.imageUrl) {
+          if (!colLogoBuffers.has(line.imageUrl)) {
+            const buffer = await fetchImageAsBuffer(line.imageUrl);
+            colLogoBuffers.set(line.imageUrl, buffer);
+          }
+        }
+      }
+    }
+  }
+
+  const footerColLogoBuffers: Map<string, Uint8Array | null> = new Map();
+  if (settings?.footerColumns) {
+    for (const col of settings.footerColumns) {
+      for (const line of col.lines) {
+        if (line.type === 'image' && line.imageUrl) {
+          if (!footerColLogoBuffers.has(line.imageUrl)) {
+            const buffer = await fetchImageAsBuffer(line.imageUrl);
+            footerColLogoBuffers.set(line.imageUrl, buffer);
+          }
+        }
+      }
+    }
+  }
+
+  // Pre-fetch images from questions
+  const questionImageBuffers: Map<string, Uint8Array | null> = new Map();
+  for (const q of exam.questions) {
+    const urls = extractImageUrls(q.text);
+    for (const url of urls) {
+      if (!questionImageBuffers.has(url)) {
+        const buffer = await fetchImageAsBuffer(url);
+        questionImageBuffers.set(url, buffer);
+      }
+    }
+  }
+
+  const createLogoImage = (buffer: Uint8Array | null, width = 50, height = 50) => {
+    if (!buffer) return null;
     return new ImageRun({
-      data: logoBuffer,
+      data: buffer,
       transformation: {
-        width: 50,
-        height: 50,
+        width: width,
+        height: height,
       },
     } as any);
   };
 
   const doc = new Document({
+    numbering: {
+      config: [
+        {
+          reference: "main-numbering",
+          levels: [
+            {
+              level: 0,
+              format: LevelFormat.DECIMAL,
+              text: "%1.",
+              alignment: AlignmentType.LEFT,
+              style: {
+                paragraph: {
+                  indent: { left: 720, hanging: 360 },
+                },
+              },
+            },
+            {
+              level: 1,
+              format: LevelFormat.DECIMAL,
+              text: "%2.",
+              alignment: AlignmentType.LEFT,
+              style: {
+                paragraph: {
+                  indent: { left: 1080, hanging: 360 },
+                },
+              },
+            },
+          ],
+        },
+      ],
+    },
     sections: [
       {
         properties: {},
-        footers: {
-          default: new Footer({
-            children: [
+        headers: {
+          default: new Header({
+            children: settings?.showWatermark && settings.watermarkText ? [
               new Paragraph({
                 alignment: AlignmentType.CENTER,
                 children: [
                   new TextRun({
-                    text: `${orgName} / ${orgSubName} / ${module.code} - Page `,
-                    size: 16,
-                  }),
-                  new TextRun({
-                    children: [PageNumber.CURRENT],
-                    size: 16,
-                  }),
-                  new TextRun({
-                    text: " sur ",
-                    size: 16,
-                  }),
-                  new TextRun({
-                    children: [PageNumber.TOTAL_PAGES],
-                    size: 16,
+                    text: settings.watermarkText,
+                    color: (() => {
+                      const hex = (settings.watermarkColor || "#E0E0E0").replace('#', '');
+                      if (settings.watermarkOpacity !== undefined) {
+                        // Blend with white (FFFFFF) based on opacity (0-100)
+                        // This is a rough approximation for 'transparency' in Word text runs
+                        const r = parseInt(hex.substring(0, 2), 16);
+                        const g = parseInt(hex.substring(2, 4), 16);
+                        const b = parseInt(hex.substring(4, 6), 16);
+                        const alpha = settings.watermarkOpacity / 100;
+                        const nr = Math.round(r * alpha + 255 * (1 - alpha)).toString(16).padStart(2, '0');
+                        const ng = Math.round(g * alpha + 255 * (1 - alpha)).toString(16).padStart(2, '0');
+                        const nb = Math.round(b * alpha + 255 * (1 - alpha)).toString(16).padStart(2, '0');
+                        return `${nr}${ng}${nb}`;
+                      }
+                      return hex;
+                    })(),
+                    size: 110,
+                    bold: true,
                   }),
                 ],
               }),
+            ] : [],
+          }),
+        },
+        footers: {
+          default: new Footer({
+            children: [
+              ...(settings?.showFooter && settings?.footerColumns && settings.footerColumns.length > 0 ? [
+                new Table({
+                  width: { size: 100, type: WidthType.PERCENTAGE },
+                  rows: [
+                    new TableRow({
+                      children: settings.footerColumns.map(col => new TableCell({
+                        width: { size: col.width, type: WidthType.PERCENTAGE },
+                        shading: col.bgColor ? { fill: col.bgColor.replace('#', '') } : undefined,
+                        borders: {
+                          top: { style: BorderStyle.SINGLE, size: 2, color: "000000" },
+                          bottom: { style: BorderStyle.SINGLE, size: 2, color: "000000" },
+                          left: col.borderLeft ? { style: BorderStyle.DOUBLE, size: 6, color: "000000" } : { style: BorderStyle.SINGLE, size: 2, color: "000000" },
+                          right: col.borderRight ? { style: BorderStyle.DOUBLE, size: 6, color: "000000" } : { style: BorderStyle.SINGLE, size: 2, color: "000000" },
+                        },
+                        children: col.lines.map((line, idx) => {
+                          if (line.type === 'image') {
+                            const buffer = footerColLogoBuffers.get(line.imageUrl || '');
+                            const img = createLogoImage(buffer || null, line.imageWidth || 30, line.imageHeight || 30);
+                            return new Paragraph({
+                              alignment: line.alignment === 'right' ? AlignmentType.RIGHT : 
+                                         line.alignment === 'left' ? AlignmentType.LEFT : 
+                                         AlignmentType.CENTER,
+                              children: img ? [img] : [],
+                              border: settings?.showFooterLines && idx < col.lines.length - 1 
+                                ? { bottom: { style: BorderStyle.SINGLE, size: 1, color: col.textColor ? col.textColor.replace('#', '') : "000000" } } 
+                                : undefined,
+                              spacing: { before: 40, after: 40 }
+                            });
+                          } else {
+                            const isArabicText = /[\u0600-\u06FF]/.test(line.text || '');
+                            return new Paragraph({
+                              alignment: line.alignment === 'right' ? AlignmentType.RIGHT : 
+                                         line.alignment === 'left' ? AlignmentType.LEFT : 
+                                         AlignmentType.CENTER,
+                              bidirectional: isArabicText,
+                              children: [
+                                new TextRun({ 
+                                  text: replaceVariables(line.text || ''), 
+                                  bold: line.isBold, 
+                                  italics: line.isItalic,
+                                  size: (line.fontSize || 9) * 2,
+                                  font: line.fontFamily ? line.fontFamily.split(',')[0].replace(/"/g, '') : undefined,
+                                  color: col.textColor ? col.textColor.replace('#', '') : undefined
+                                }),
+                              ],
+                              border: settings?.showFooterLines && idx < col.lines.length - 1 
+                                ? { bottom: { style: BorderStyle.SINGLE, size: 1, color: col.textColor ? col.textColor.replace('#', '') : "000000" } } 
+                                : undefined,
+                              spacing: { before: 40, after: 40 }
+                            });
+                          }
+                        }),
+                        verticalAlign: VerticalAlign.CENTER,
+                      }))
+                    })
+                  ]
+                }),
+                new Paragraph({
+                  alignment: AlignmentType.CENTER,
+                  children: [
+                    new TextRun({
+                      text: "Page ",
+                      size: 16,
+                    }),
+                    new TextRun({
+                      children: [PageNumber.CURRENT],
+                      size: 16,
+                    }),
+                    new TextRun({
+                      text: " sur ",
+                      size: 16,
+                    }),
+                    new TextRun({
+                      children: [PageNumber.TOTAL_PAGES],
+                      size: 16,
+                    }),
+                  ],
+                  spacing: { before: 100 }
+                })
+              ] : [
+                ...(settings?.showFooter && (settings.showFooterText ?? true) ? [
+                  new Paragraph({
+                    alignment: AlignmentType.CENTER,
+                    children: [
+                      new TextRun({
+                        text: `${footerText} - Page `,
+                        size: (settings.footerFontSize || 9) * 2,
+                        font: settings.footerFontFamily ? settings.footerFontFamily.split(',')[0].replace(/"/g, '') : undefined,
+                      }),
+                      new TextRun({
+                        children: [PageNumber.CURRENT],
+                        size: (settings.footerFontSize || 9) * 2,
+                        font: settings.footerFontFamily ? settings.footerFontFamily.split(',')[0].replace(/"/g, '') : undefined,
+                      }),
+                      new TextRun({
+                        text: " sur ",
+                        size: (settings.footerFontSize || 9) * 2,
+                        font: settings.footerFontFamily ? settings.footerFontFamily.split(',')[0].replace(/"/g, '') : undefined,
+                      }),
+                      new TextRun({
+                        children: [PageNumber.TOTAL_PAGES],
+                        size: (settings.footerFontSize || 9) * 2,
+                        font: settings.footerFontFamily ? settings.footerFontFamily.split(',')[0].replace(/"/g, '') : undefined,
+                      }),
+                    ],
+                  })
+                ] : []),
+                ...(settings?.showFooter && (settings.showFooterTable ?? true) && settings.footerTable ? [
+                  new Table({
+                    width: { size: 100, type: WidthType.PERCENTAGE },
+                    rows: settings.footerTable.rows.map(row => new TableRow({
+                      children: row.map(cell => new TableCell({
+                        width: { size: 100 / (row.length || 1), type: WidthType.PERCENTAGE },
+                        children: [new Paragraph({ 
+                          alignment: AlignmentType.CENTER,
+                          children: [new TextRun({ 
+                            text: replaceVariables(cell), 
+                            size: ((settings.footerFontSize || 9) - 1) * 2,
+                            font: settings.footerFontFamily ? settings.footerFontFamily.split(',')[0].replace(/"/g, '') : undefined,
+                          })] 
+                        })],
+                        verticalAlign: VerticalAlign.CENTER,
+                        borders: {
+                          top: { style: BorderStyle.SINGLE, size: 1, color: "000000" },
+                          bottom: { style: BorderStyle.SINGLE, size: 1, color: "000000" },
+                          left: { style: BorderStyle.SINGLE, size: 1, color: "000000" },
+                          right: { style: BorderStyle.SINGLE, size: 1, color: "000000" },
+                        }
+                      }))
+                    }))
+                  })
+                ] : [])
+              ])
             ],
           }),
         },
@@ -104,106 +352,156 @@ export const exportExamToWord = async (
             width: { size: 100, type: WidthType.PERCENTAGE },
             rows: [
               new TableRow({
-                children: [
-                  new TableCell({
-                    width: { size: 12, type: WidthType.PERCENTAGE },
-                    children: [
-                      (() => {
-                        const img = createLogoImage();
-                        return img ? 
-                          new Paragraph({ alignment: AlignmentType.CENTER, children: [img] }) :
-                          new Paragraph({
-                            alignment: AlignmentType.CENTER,
-                            children: [
-                              new TextRun({ 
-                                text: "OFPPT", 
-                                bold: true, 
-                                size: 24
-                              })
-                            ]
-                          });
-                      })(),
-                    ],
-                    verticalAlign: VerticalAlign.CENTER,
-                  }),
-                  new TableCell({
-                    width: { size: 76, type: WidthType.PERCENTAGE },
-                    children: settings?.headerLines && settings.headerLines.length > 0 
-                      ? settings.headerLines.map((line, idx) => {
-                          const isArabic = /[\u0600-\u06FF]/.test(line.text);
+                children: settings?.headerColumns && settings.headerColumns.length > 0
+                  ? settings.headerColumns.map(col => new TableCell({
+                      width: { size: col.width, type: WidthType.PERCENTAGE },
+                      shading: col.bgColor ? { fill: col.bgColor.replace('#', '') } : undefined,
+                      borders: {
+                        top: { style: BorderStyle.SINGLE, size: 2, color: "000000" },
+                        bottom: { style: BorderStyle.SINGLE, size: 2, color: "000000" },
+                        left: col.borderLeft ? { style: BorderStyle.DOUBLE, size: 6, color: "000000" } : { style: BorderStyle.SINGLE, size: 2, color: "000000" },
+                        right: col.borderRight ? { style: BorderStyle.DOUBLE, size: 6, color: "000000" } : { style: BorderStyle.SINGLE, size: 2, color: "000000" },
+                      },
+                      children: col.lines.map((line, idx) => {
+                        if (line.type === 'image') {
+                          const buffer = colLogoBuffers.get(line.imageUrl || '');
+                          const img = createLogoImage(buffer || null, line.imageWidth || 40, line.imageHeight || 40);
                           return new Paragraph({
                             alignment: line.alignment === 'right' ? AlignmentType.RIGHT : 
                                        line.alignment === 'left' ? AlignmentType.LEFT : 
                                        AlignmentType.CENTER,
-                            bidirectional: isArabic,
+                            children: img ? [img] : [],
+                            border: settings?.showHeaderLines && idx < col.lines.length - 1 
+                              ? { bottom: { style: BorderStyle.SINGLE, size: 1, color: col.textColor ? col.textColor.replace('#', '') : "000000" } } 
+                              : undefined,
+                            spacing: { before: 80, after: 80 }
+                          });
+                        } else {
+                          const isArabicText = /[\u0600-\u06FF]/.test(line.text || '');
+                          return new Paragraph({
+                            alignment: line.alignment === 'right' ? AlignmentType.RIGHT : 
+                                       line.alignment === 'left' ? AlignmentType.LEFT : 
+                                       AlignmentType.CENTER,
+                            bidirectional: isArabicText,
                             children: [
                               new TextRun({ 
-                                text: line.text, 
+                                text: replaceVariables(line.text || ''), 
                                 bold: line.isBold, 
                                 italics: line.isItalic,
-                                size: line.fontSize * 2,
-                                font: line.fontFamily ? line.fontFamily.split(',')[0].replace(/"/g, '') : undefined
+                                size: (line.fontSize || 10) * 2,
+                                font: line.fontFamily ? line.fontFamily.split(',')[0].replace(/"/g, '') : undefined,
+                                color: col.textColor ? col.textColor.replace('#', '') : undefined
                               }),
                             ],
-                            border: settings?.showHeaderLines && idx < settings.headerLines!.length - 1 
-                              ? { bottom: { style: BorderStyle.SINGLE, size: 1, color: "000000" } } 
-                              : undefined
+                            border: settings?.showHeaderLines && idx < col.lines.length - 1 
+                              ? { bottom: { style: BorderStyle.SINGLE, size: 1, color: col.textColor ? col.textColor.replace('#', '') : "000000" } } 
+                              : undefined,
+                            spacing: { before: 80, after: 80 }
                           });
-                        })
-                      : [
+                        }
+                      }),
+                      verticalAlign: VerticalAlign.CENTER,
+                    }))
+                  : [
+                      new TableCell({
+                        width: { size: 15, type: WidthType.PERCENTAGE },
+                        borders: {
+                          top: { style: BorderStyle.SINGLE, size: 2, color: "000000" },
+                          bottom: { style: BorderStyle.SINGLE, size: 2, color: "000000" },
+                          left: { style: BorderStyle.SINGLE, size: 2, color: "000000" },
+                          right: { style: BorderStyle.SINGLE, size: 2, color: "000000" },
+                        },
+                        children: [
+                          (() => {
+                            const img = createLogoImage(logoBufferLeft);
+                            return img ? 
+                              new Paragraph({ alignment: AlignmentType.CENTER, children: [img] }) :
+                              new Paragraph({
+                                alignment: AlignmentType.CENTER,
+                                children: [
+                                  new TextRun({ 
+                                    text: orgName, 
+                                    bold: true, 
+                                    size: 20
+                                  })
+                                ]
+                              });
+                          })(),
+                        ],
+                        verticalAlign: VerticalAlign.CENTER,
+                      }),
+                      new TableCell({
+                        width: { size: 70, type: WidthType.PERCENTAGE },
+                        borders: {
+                          top: { style: BorderStyle.SINGLE, size: 2, color: "000000" },
+                          bottom: { style: BorderStyle.SINGLE, size: 2, color: "000000" },
+                          left: { style: BorderStyle.SINGLE, size: 2, color: "000000" },
+                          right: { style: BorderStyle.SINGLE, size: 2, color: "000000" },
+                        },
+                        children: [
                           new Paragraph({
                             alignment: AlignmentType.CENTER,
                             bidirectional: true,
                             children: [
                               new TextRun({ text: orgNameArabic, bold: true, size: 28 }),
                             ],
-                            border: settings?.showHeaderLines ? { bottom: { style: BorderStyle.SINGLE, size: 1, color: "000000" } } : undefined
+                            border: settings?.showHeaderLines ? { bottom: { style: BorderStyle.SINGLE, size: 1, color: "000000" } } : undefined,
+                            spacing: { before: 40, after: 40 }
                           }),
                           new Paragraph({
                             alignment: AlignmentType.CENTER,
                             children: [
-                              new TextRun({ text: orgNameFrench, bold: true, size: 20 }),
+                              new TextRun({ text: orgNameFrench, bold: true, size: 18 }),
                             ],
-                            border: settings?.showHeaderLines ? { bottom: { style: BorderStyle.SINGLE, size: 1, color: "000000" } } : undefined
+                            border: settings?.showHeaderLines ? { bottom: { style: BorderStyle.SINGLE, size: 1, color: "000000" } } : undefined,
+                            spacing: { before: 40, after: 40 }
                           }),
                           new Paragraph({
                             alignment: AlignmentType.CENTER,
                             children: [
-                              new TextRun({ text: regionalDirection, bold: true, size: 20 }),
+                              new TextRun({ text: regionalDirection, bold: true, size: 18 }),
                             ],
-                            border: settings?.showHeaderLines ? { bottom: { style: BorderStyle.SINGLE, size: 1, color: "000000" } } : undefined
+                            border: settings?.showHeaderLines ? { bottom: { style: BorderStyle.SINGLE, size: 1, color: "000000" } } : undefined,
+                            spacing: { before: 40, after: 40 }
                           }),
                           new Paragraph({
                             alignment: AlignmentType.CENTER,
                             children: [
-                              new TextRun({ text: institutionName, bold: true, size: 20 }),
+                              new TextRun({ text: institutionName, bold: true, size: 18 }),
                             ],
+                            spacing: { before: 40, after: 40 }
                           }),
                         ],
-                    verticalAlign: VerticalAlign.CENTER,
-                  }),
-                  new TableCell({
-                    width: { size: 12, type: WidthType.PERCENTAGE },
-                    children: [
-                      (() => {
-                        const img = createLogoImage();
-                        return img ? 
-                          new Paragraph({ alignment: AlignmentType.CENTER, children: [img] }) :
-                          new Paragraph({
-                            alignment: AlignmentType.CENTER,
-                            children: [
-                              new TextRun({ 
-                                text: "OFPPT", 
-                                bold: true, 
-                                size: 24
-                              })
-                            ]
-                          });
-                      })(),
+                        verticalAlign: VerticalAlign.CENTER,
+                      }),
+                      new TableCell({
+                        width: { size: 15, type: WidthType.PERCENTAGE },
+                        borders: {
+                          top: { style: BorderStyle.SINGLE, size: 2, color: "000000" },
+                          bottom: { style: BorderStyle.SINGLE, size: 2, color: "000000" },
+                          left: { style: BorderStyle.SINGLE, size: 2, color: "000000" },
+                          right: { style: BorderStyle.SINGLE, size: 2, color: "000000" },
+                        },
+                        children: [
+                          (() => {
+                            const img = createLogoImage(logoBufferRight);
+                            return img ? 
+                              new Paragraph({ alignment: AlignmentType.CENTER, children: [img] }) :
+                              new Paragraph({
+                                alignment: AlignmentType.CENTER,
+                                children: [
+                                  new TextRun({ 
+                                    text: orgSubName, 
+                                    bold: true, 
+                                    size: 20
+                                  })
+                                ]
+                              });
+                          })(),
+                        ],
+                        verticalAlign: VerticalAlign.CENTER,
+                      }),
                     ],
-                    verticalAlign: VerticalAlign.CENTER,
-                  }),
-                ],
               }),
             ],
           }),
@@ -337,7 +635,8 @@ export const exportExamToWord = async (
               'short-answer': 'Questions à Réponse Courte',
               'fill-in-the-blanks': 'Texte à Trous',
               'matching': "Questions d'Appariement",
-              'ordering': "Questions d'Ordonnancement"
+              'ordering': "Questions d'Ordonnancement",
+              'practical': 'Évaluation Pratique'
             };
 
             const orderedTypes = [
@@ -346,7 +645,8 @@ export const exportExamToWord = async (
               'matching',
               'ordering',
               'fill-in-the-blanks',
-              'short-answer'
+              'short-answer',
+              'practical'
             ].filter(type => groupedQuestions[type]);
 
             return orderedTypes.flatMap(type => {
@@ -419,7 +719,8 @@ export const exportExamToWord = async (
                                   alignment: rtl ? AlignmentType.RIGHT : AlignmentType.LEFT,
                                   bidirectional: rtl,
                                   children: [
-                                    new TextRun({ text: `${originalIdx + 1}. ${cleanHtml(q.text)}`, size: 20 }),
+                                    new TextRun({ text: `${originalIdx + 1}. `, size: 20 }),
+                                    ...htmlToDocxRuns(q.text, { size: 20 }),
                                     new TextRun({ text: ` (${Number.isInteger(q.points) ? q.points : q.points.toFixed(2)} pts)`, size: 16, italics: true, color: "666666" })
                                   ] 
                                 })
@@ -471,7 +772,7 @@ export const exportExamToWord = async (
                       })
                     ];
                   }
-                  return groupedQuestions[type].flatMap(({ q, originalIdx }) => renderQuestionDocx(q, originalIdx, showAnswers));
+                  return groupedQuestions[type].flatMap(({ q, originalIdx }) => renderQuestionDocx(q, originalIdx, showAnswers, questionImageBuffers));
                 })()
               ];
             });
@@ -519,19 +820,17 @@ export const exportExamToWord = async (
   saveAs(blob, `${exam.title.replace(/\s+/g, '_')}_${showAnswers ? 'Corrige' : 'Examen'}.docx`);
 };
 
-function renderQuestionDocx(q: Question, index: number, showAnswers: boolean): (Paragraph | Table)[] {
+function renderQuestionDocx(q: Question, index: number, showAnswers: boolean, imageBuffers: Map<string, Uint8Array | null>): (Paragraph | Table)[] {
   const elements: (Paragraph | Table)[] = [];
   const rtl = isArabic(q.text);
 
-  // Question header (Points and Text)
-  const headerChildren: TextRun[] = [
-    new TextRun({ text: `${index + 1}. `, bold: true }),
-  ];
-
   if (q.type === 'fill-in-the-blanks') {
+    const headerChildren: TextRun[] = [
+      new TextRun({ text: `${index + 1}. `, bold: true }),
+    ];
     const parts = q.text.split('[blank]');
     parts.forEach((part, i) => {
-      headerChildren.push(new TextRun({ text: cleanHtml(part), bold: true }));
+      headerChildren.push(...htmlToDocxRuns(part));
       if (i < parts.length - 1) {
         if (showAnswers && q.correctAnswers?.[i]) {
           headerChildren.push(new TextRun({ 
@@ -544,20 +843,56 @@ function renderQuestionDocx(q: Question, index: number, showAnswers: boolean): (
         }
       }
     });
+    headerChildren.push(new TextRun({ text: ` (${Number.isInteger(q.points) ? q.points : q.points.toFixed(2)} pts)`, italics: true, size: 18 }));
+    
+    elements.push(
+      new Paragraph({
+        alignment: rtl ? AlignmentType.RIGHT : AlignmentType.LEFT,
+        bidirectional: rtl,
+        spacing: { before: 300, after: 100 },
+        children: headerChildren,
+      })
+    );
   } else {
-    headerChildren.push(new TextRun({ text: cleanHtml(q.text), bold: true }));
+    // For other questions, use a table to handle multi-line content correctly next to the index
+    const colAWidth = 500; // DXA for "1. "
+    const colCWidth = 800; // DXA for "(pts)"
+
+    const questionContentElements = htmlToDocxElements(q.text, { size: 22 }, imageBuffers);
+
+    elements.push(new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      borders: {
+        top: { style: BorderStyle.NONE },
+        bottom: { style: BorderStyle.NONE },
+        left: { style: BorderStyle.NONE },
+        right: { style: BorderStyle.NONE },
+        insideHorizontal: { style: BorderStyle.NONE },
+        insideVertical: { style: BorderStyle.NONE },
+      },
+      rows: [
+        new TableRow({
+          children: [
+            new TableCell({
+              width: { size: colAWidth, type: WidthType.DXA },
+              children: [new Paragraph({ children: [new TextRun({ text: `${index + 1}. `, bold: true })] })],
+            }),
+            new TableCell({
+              width: { size: 100, type: WidthType.PERCENTAGE },
+              children: questionContentElements,
+            }),
+            new TableCell({
+              width: { size: colCWidth, type: WidthType.DXA },
+              children: [new Paragraph({ 
+                alignment: AlignmentType.RIGHT,
+                children: [new TextRun({ text: `(${Number.isInteger(q.points) ? q.points : q.points.toFixed(2)} pts)`, italics: true, size: 16 })] 
+              })],
+            }),
+          ]
+        })
+      ]
+    }));
   }
-
-  headerChildren.push(new TextRun({ text: ` (${Number.isInteger(q.points) ? q.points : q.points.toFixed(2)} pts)`, italics: true, size: 18 }));
-
-  elements.push(
-    new Paragraph({
-      alignment: rtl ? AlignmentType.RIGHT : AlignmentType.LEFT,
-      bidirectional: rtl,
-      spacing: { before: 300, after: 100 },
-      children: headerChildren,
-    })
-  );
 
   if (q.type === 'multiple-choice') {
     const optionsWithOrig = (q.options || []).map((opt, idx) => ({ ...opt, originalIndex: idx }));
@@ -594,7 +929,11 @@ function renderQuestionDocx(q: Question, index: number, showAnswers: boolean): (
                   color: showAnswers && opt1.isCorrect ? "059669" : undefined
                 }),
                 new TextRun({ 
-                  text: `${String.fromCharCode(97 + i)}) ${cleanHtml(opt1.text)}`,
+                  text: `${String.fromCharCode(97 + i)}) `,
+                  bold: showAnswers && opt1.isCorrect,
+                  color: showAnswers && opt1.isCorrect ? "059669" : undefined
+                }),
+                ...htmlToDocxRuns(opt1.text, { 
                   bold: showAnswers && opt1.isCorrect,
                   color: showAnswers && opt1.isCorrect ? "059669" : undefined
                 }),
@@ -621,7 +960,11 @@ function renderQuestionDocx(q: Question, index: number, showAnswers: boolean): (
                     color: showAnswers && opt2.isCorrect ? "059669" : undefined
                   }),
                   new TextRun({ 
-                    text: `${String.fromCharCode(97 + i + 1)}) ${cleanHtml(opt2.text)}`,
+                    text: `${String.fromCharCode(97 + i + 1)}) `,
+                    bold: showAnswers && opt2.isCorrect,
+                    color: showAnswers && opt2.isCorrect ? "059669" : undefined
+                  }),
+                  ...htmlToDocxRuns(opt2.text, { 
                     bold: showAnswers && opt2.isCorrect,
                     color: showAnswers && opt2.isCorrect ? "059669" : undefined
                   }),
@@ -668,8 +1011,8 @@ function renderQuestionDocx(q: Question, index: number, showAnswers: boolean): (
           indent: optRtl ? undefined : { left: 720 },
           children: [
             new TextRun({ text: " [  ] " }),
-            new TextRun({ text: cleanHtml(opt.text) }),
-            showAnswers && q.correctOrder ? new TextRun({ text: ` (Pos: ${q.correctOrder.indexOf(opt.originalIndex) + 1})`, color: "059669" }) : new TextRun({}),
+            ...htmlToDocxRuns(opt.text),
+            showAnswers && q.correctOrder ? new TextRun({ text: ` (Pos: ${q.correctOrder.indexOf(opt.originalIndex) + 1})`, color: "059669", bold: true }) : new TextRun({}),
           ],
         })
       );
@@ -677,7 +1020,9 @@ function renderQuestionDocx(q: Question, index: number, showAnswers: boolean): (
   } else if (q.type === 'matching') {
     const leftOptions = q.options || [];
     const rightOptionsRaw = q.matchOptions || [];
-    const rtl = isArabic(q.text) || (leftOptions.length > 0 && isArabic(leftOptions[0].text));
+    const qRtl = isArabic(q.text);
+    const optionsRtl = leftOptions.length > 0 && isArabic(leftOptions[0].text);
+    const rtl = qRtl || optionsRtl;
     const rightWithOriginalIndex = rightOptionsRaw.map((text, originalIndex) => ({ text, originalIndex }));
     
     // Shuffle the right side for the export document
@@ -688,77 +1033,93 @@ function renderQuestionDocx(q: Question, index: number, showAnswers: boolean): (
     }
 
     const tableRows = [];
+    
     // Header row
+    const columnAHeader = q.columnAHeader || (rtl ? 'العمود أ' : "Colonne A");
+    const columnBHeader = q.columnBHeader || (rtl ? 'العمود ب' : "Colonne B");
+    const matchingHeader = rtl ? 'إجابة' : "Réponse";
+
     tableRows.push(
       new TableRow({
+        tableHeader: true,
         children: [
           new TableCell({ 
-            width: { size: 45, type: WidthType.PERCENTAGE },
+            width: { size: 42, type: WidthType.PERCENTAGE },
             children: [new Paragraph({ 
               alignment: rtl ? AlignmentType.RIGHT : AlignmentType.LEFT, 
               bidirectional: rtl, 
               children: [new TextRun({ 
-                text: q.columnAHeader || (rtl ? 'عناصر (يمين)' : "Éléments (Gauche)"), 
+                text: columnAHeader, 
                 bold: true, 
                 size: 20 
               })] 
             })],
-            shading: { fill: "f9fafb" }
+            shading: { fill: "f1f5f9" },
+            verticalAlign: VerticalAlign.CENTER,
+            margins: { top: 100, bottom: 100, left: 100, right: 100 }
           }),
           new TableCell({ 
-            width: { size: 10, type: WidthType.PERCENTAGE },
+            width: { size: 16, type: WidthType.PERCENTAGE },
             children: [new Paragraph({ 
-              children: [new TextRun({ text: rtl ? 'حرف' : "Lettre", bold: true, size: 20 })], 
+              children: [new TextRun({ text: matchingHeader, bold: true, size: 20 })], 
               alignment: AlignmentType.CENTER 
             })],
-            shading: { fill: "f9fafb" }
+            shading: { fill: "f1f5f9" },
+            verticalAlign: VerticalAlign.CENTER,
+            margins: { top: 100, bottom: 100, left: 100, right: 100 }
           }),
           new TableCell({ 
-            width: { size: 45, type: WidthType.PERCENTAGE },
+            width: { size: 42, type: WidthType.PERCENTAGE },
             children: [new Paragraph({ 
               alignment: rtl ? AlignmentType.RIGHT : AlignmentType.LEFT, 
               bidirectional: rtl, 
               children: [new TextRun({ 
-                text: q.columnBHeader || (rtl ? 'عناصر (يسار)' : "Éléments (Droite)"), 
+                text: columnBHeader, 
                 bold: true, 
                 size: 20 
               })] 
             })],
-            shading: { fill: "f9fafb" }
+            shading: { fill: "f1f5f9" },
+            verticalAlign: VerticalAlign.CENTER,
+            margins: { top: 100, bottom: 100, left: 100, right: 100 }
           }),
         ],
       })
     );
 
-    for (let i = 0; i < leftOptions.length; i++) {
-      const leftText = leftOptions[i].text;
+    // Rows for each option
+    for (let i = 0; i < Math.max(leftOptions.length, shuffledRight.length); i++) {
+      const leftText = leftOptions[i]?.text || "";
       const rightText = shuffledRight[i]?.text || "";
-      const rightLabel = String.fromCharCode(65 + i);
+      const rightLabel = String.fromCharCode(65 + i); // A, B, C...
       const lRtl = isArabic(leftText);
       const rRtl = isArabic(rightText);
       
-      const middleCellChildren: Paragraph[] = [];
-      if (i === 0) {
+      const middleCellParagraphs: Paragraph[] = [];
+      
+      if (i < leftOptions.length) {
         if (showAnswers && q.correctMatches) {
-          leftOptions.forEach((_, lIdx) => {
-            const correctRightOrigIdx = q.correctMatches![lIdx];
-            const currentIdxInShuffled = shuffledRight.findIndex(r => r.originalIndex === correctRightOrigIdx);
-            if (currentIdxInShuffled !== -1) {
-              middleCellChildren.push(new Paragraph({
-                children: [new TextRun({ 
-                  text: `${lIdx + 1} → ${String.fromCharCode(65 + currentIdxInShuffled)}`, 
-                  size: 14, 
-                  bold: true,
-                  color: "059669"
-                })],
-                alignment: AlignmentType.CENTER
-              }));
-            }
-          });
+          const correctRightOrigIdx = q.correctMatches[i];
+          const currentIdxInShuffled = shuffledRight.findIndex(r => r.originalIndex === correctRightOrigIdx);
+          const answerLabel = currentIdxInShuffled !== -1 ? String.fromCharCode(65 + currentIdxInShuffled) : "?";
+          
+          middleCellParagraphs.push(new Paragraph({
+            alignment: AlignmentType.CENTER,
+            children: [
+              new TextRun({ 
+                text: `[ ${answerLabel} ]`, 
+                bold: true,
+                color: "059669",
+                size: 20
+              })
+            ]
+          }));
         } else {
-          middleCellChildren.push(new Paragraph({
-            children: [new TextRun({ text: rtl ? "مساحة للسهام" : "Espace flèches", size: 14, color: "cbd5e1", bold: true })],
-            alignment: AlignmentType.CENTER
+          middleCellParagraphs.push(new Paragraph({
+            alignment: AlignmentType.CENTER,
+            children: [
+              new TextRun({ text: "[      ]", size: 20, color: "cbd5e1" })
+            ]
           }));
         }
       }
@@ -767,16 +1128,37 @@ function renderQuestionDocx(q: Question, index: number, showAnswers: boolean): (
         new TableRow({
           children: [
             new TableCell({ 
-              children: [new Paragraph({ alignment: lRtl ? AlignmentType.RIGHT : AlignmentType.LEFT, bidirectional: lRtl, children: [new TextRun({ text: `${i + 1}. ${cleanHtml(leftText)}`, size: 18 })] })] 
-            }),
-            new TableCell({ 
-              verticalMerge: i === 0 ? VerticalMergeType.RESTART : VerticalMergeType.CONTINUE,
+              width: { size: 42, type: WidthType.PERCENTAGE },
+              children: leftText ? [new Paragraph({ 
+                alignment: lRtl ? AlignmentType.RIGHT : AlignmentType.LEFT, 
+                bidirectional: lRtl, 
+                children: [
+                  new TextRun({ text: `${i + 1}. `, bold: true, size: 20 }),
+                  ...htmlToDocxRuns(leftText, { size: 20 })
+                ] 
+              })] : [],
               verticalAlign: VerticalAlign.CENTER,
-              children: middleCellChildren,
-              shading: showAnswers ? { fill: "f0fdf4" } : undefined
+              margins: { top: 100, bottom: 100, left: 100, right: 100 }
             }),
             new TableCell({ 
-              children: [new Paragraph({ alignment: rRtl ? AlignmentType.RIGHT : AlignmentType.LEFT, bidirectional: rRtl, children: [new TextRun({ text: `${rightLabel}. ${cleanHtml(rightText)}`, size: 18 })] })] 
+              width: { size: 16, type: WidthType.PERCENTAGE },
+              verticalAlign: VerticalAlign.CENTER,
+              children: middleCellParagraphs,
+              shading: showAnswers && i < leftOptions.length ? { fill: "f0fdf4" } : undefined,
+              margins: { top: 50, bottom: 50 }
+            }),
+            new TableCell({ 
+              width: { size: 42, type: WidthType.PERCENTAGE },
+              children: rightText ? [new Paragraph({ 
+                alignment: rRtl ? AlignmentType.RIGHT : AlignmentType.LEFT, 
+                bidirectional: rRtl, 
+                children: [
+                  new TextRun({ text: `${rightLabel}. `, bold: true, size: 20 }),
+                  ...htmlToDocxRuns(rightText, { size: 20 })
+                ] 
+              })] : [],
+              verticalAlign: VerticalAlign.CENTER,
+              margins: { top: 100, bottom: 100, left: 100, right: 100 }
             }),
           ],
         })
@@ -793,12 +1175,12 @@ function renderQuestionDocx(q: Question, index: number, showAnswers: boolean): (
       bidirectional: rtl,
       children: [
         new TextRun({ 
-          text: rtl ? "قم بمطابقة كل رقم من العمود الأيمن مع الحرف المقابل له في العمود الأوسط." : "Associez chaque chiffre de la colonne de gauche à sa lettre correspondante dans la colonne centrale.",
+          text: rtl ? "قم بمطابقة كل رقم من العمود الأيمن مع الحرف المقابل له في العمود الأوسط." : "Indiquez pour chaque numéro de la colonne de gauche la lettre correspondante dans la colonne centrale.",
           italics: true,
-          size: 16
+          size: 18
         })
       ],
-      spacing: { before: 100 }
+      spacing: { before: 200, after: 200 }
     }));
   } else if (q.type === 'fill-in-the-blanks') {
     // Already rendered in header above
@@ -820,9 +1202,34 @@ function renderQuestionDocx(q: Question, index: number, showAnswers: boolean): (
         alignment: rtl ? AlignmentType.RIGHT : AlignmentType.LEFT,
         bidirectional: rtl,
         indent: rtl ? undefined : { left: 720 }, 
-        children: [new TextRun({ text: `${rtl ? 'الإجابة:' : 'Corrigé:'} ${cleanHtml(q.correctAnswer || '')}`, italics: true, color: "059669" })] 
+        children: [
+          new TextRun({ text: `${rtl ? 'الإجابة:' : 'Corrigé:'} `, italics: true, color: "059669", bold: true }),
+          ...htmlToDocxRuns(q.correctAnswer || '', { italic: true, color: "059669" })
+        ] 
       }));
     }
+  } else if (q.type === 'practical') {
+    elements.push(new Paragraph({ 
+      alignment: rtl ? AlignmentType.RIGHT : AlignmentType.LEFT,
+      bidirectional: rtl,
+      indent: rtl ? undefined : { left: 720 }, 
+      text: "................................................................................................................................................................",
+      spacing: { before: 200 }
+    }));
+    elements.push(new Paragraph({ 
+      alignment: rtl ? AlignmentType.RIGHT : AlignmentType.LEFT,
+      bidirectional: rtl,
+      indent: rtl ? undefined : { left: 720 }, 
+      children: [
+        new TextRun({ 
+          text: rtl ? "مساحة للتقييم العملي / ملاحظات المكون..." : "Espace pour l'évaluation pratique / observations du formateur...",
+          italics: true,
+          color: "666666",
+          size: 18
+        })
+      ],
+      spacing: { before: 200 }
+    }));
   }
 
   return elements;
@@ -830,6 +1237,269 @@ function renderQuestionDocx(q: Question, index: number, showAnswers: boolean): (
 
 function isArabic(text: string): boolean {
   return /[\u0600-\u06FF]/.test(text || '');
+}
+
+function extractImageUrls(html: string): string[] {
+  if (!html) return [];
+  const urls: string[] = [];
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+  const imgs = doc.querySelectorAll('img');
+  imgs.forEach(img => {
+    const src = img.getAttribute('src');
+    if (src) urls.push(src);
+  });
+  return urls;
+}
+
+function htmlToDocxElements(html: string, options: { size?: number } = {}, imageBuffers: Map<string, Uint8Array | null>): Paragraph[] {
+  if (!html) return [];
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+  const paragraphs: Paragraph[] = [];
+
+  const processElement = (element: Element, isListItem = false, listLevel = 0, listType: 'bullet' | 'number' = 'bullet') => {
+    const runs: (TextRun | ImageRun)[] = [];
+    const rtl = isArabic(element.textContent || '');
+
+    const traverse = (node: Node, style: any) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        const text = node.textContent || '';
+        if (text.trim() || text === ' ') {
+          runs.push(new TextRun({
+            text,
+            bold: style.bold,
+            italics: style.italic,
+            underline: style.underline ? {} : undefined,
+            size: style.size || options.size || 22,
+            color: style.color,
+            font: style.font || (isArabic(text) ? "Amiri" : "Times New Roman")
+          }));
+        }
+      } else if (node.nodeType === Node.ELEMENT_NODE) {
+        const el = node as HTMLElement;
+        const nextStyle = { ...style };
+        const tag = el.tagName.toLowerCase();
+
+        if (tag === 'b' || tag === 'strong') nextStyle.bold = true;
+        if (tag === 'i' || tag === 'em') nextStyle.italic = true;
+        if (tag === 'u') nextStyle.underline = true;
+        if (tag === 'br') {
+          runs.push(new TextRun({ text: "", break: 1 }));
+          return;
+        }
+        if (tag === 'img') {
+          const src = el.getAttribute('src');
+          if (src && imageBuffers.has(src)) {
+            const buffer = imageBuffers.get(src);
+            if (buffer) {
+              // Try to get dimensions from style or attributes
+              let width = 300; // Increased default width
+              let height = 200;
+              const wAttr = el.getAttribute('width');
+              const hAttr = el.getAttribute('height');
+              if (wAttr) width = parseInt(wAttr);
+              if (hAttr) height = parseInt(hAttr);
+              
+              if (el.style.width) {
+                 const match = el.style.width.match(/(\d+)px/);
+                 if (match) width = parseInt(match[1]);
+              }
+              if (el.style.height) {
+                 const match = el.style.height.match(/(\d+)px/);
+                 if (match) height = parseInt(match[1]);
+              }
+
+              // Constrain width to fit within page (approx 450-500 points)
+              if (width > 450) {
+                const ratio = height / width;
+                width = 450;
+                height = Math.round(width * ratio);
+              }
+
+              runs.push(new ImageRun({
+                data: buffer,
+                transformation: { width, height }
+              } as any));
+            }
+          }
+          return;
+        }
+
+        if (tag === 'span' && el.style) {
+          if (el.style.fontWeight === 'bold' || parseInt(el.style.fontWeight) >= 700) nextStyle.bold = true;
+          if (el.style.fontStyle === 'italic') nextStyle.italic = true;
+          if (el.style.textDecoration === 'underline' || el.style.textDecorationLine === 'underline') nextStyle.underline = true;
+          if (el.style.color) {
+            let color = el.style.color;
+            if (color.startsWith('#')) nextStyle.color = color.substring(1);
+          }
+          if (el.style.fontSize) {
+            const sizeMatch = el.style.fontSize.match(/(\d+)(px|pt)/);
+            if (sizeMatch) {
+              const val = parseInt(sizeMatch[1]);
+              nextStyle.size = sizeMatch[2] === 'pt' ? val * 2 : Math.round(val * 1.5);
+            }
+          }
+          if (el.style.fontFamily) {
+            nextStyle.font = el.style.fontFamily.split(',')[0].replace(/"/g, '').trim();
+          }
+        }
+
+        el.childNodes.forEach(child => traverse(child, nextStyle));
+      }
+    };
+
+    element.childNodes.forEach(child => {
+       if (child.nodeType === Node.ELEMENT_NODE) {
+          const tag = (child as Element).tagName.toLowerCase();
+          if (['ul', 'ol', 'p', 'div'].includes(tag)) {
+             if (runs.length > 0) {
+                paragraphs.push(new Paragraph({
+                  children: [...runs],
+                  alignment: rtl ? AlignmentType.RIGHT : AlignmentType.LEFT,
+                  bidirectional: rtl,
+                  bullet: isListItem && listType === 'bullet' ? { level: listLevel } : undefined,
+                  numbering: isListItem && listType === 'number' ? { reference: 'main-numbering', level: listLevel } : undefined,
+                }));
+                runs.length = 0;
+             }
+             processNode(child, listLevel + (isListItem ? 1 : 0));
+             return;
+          }
+       }
+       traverse(child, {});
+    });
+
+    if (runs.length > 0) {
+      const p = new Paragraph({
+        children: [...runs],
+        alignment: rtl ? AlignmentType.RIGHT : AlignmentType.LEFT,
+        bidirectional: rtl,
+        bullet: isListItem && listType === 'bullet' ? { level: listLevel } : undefined,
+        numbering: isListItem && listType === 'number' ? { reference: 'main-numbering', level: listLevel } : undefined,
+        spacing: { before: isListItem ? 0 : 120, after: isListItem ? 0 : 120 }
+      });
+      paragraphs.push(p);
+    }
+  };
+
+  const processNode = (node: Node, level = 0) => {
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const el = node as Element;
+    const tag = el.tagName.toLowerCase();
+
+    if (tag === 'ul' || tag === 'ol') {
+      const type = tag === 'ul' ? 'bullet' : 'number';
+      el.childNodes.forEach(child => {
+        if (child.nodeType === Node.ELEMENT_NODE && (child as Element).tagName.toLowerCase() === 'li') {
+          processElement(child as Element, true, level, type);
+        }
+      });
+    } else if (tag === 'p' || tag === 'div' || tag === 'h1' || tag === 'h2' || tag === 'h3' || tag === 'h4' || tag === 'h5' || tag === 'h6') {
+      processElement(el);
+    } else {
+      // Default to processing as a block if it's the root body children
+      if (node.parentNode === doc.body) {
+        processElement(el);
+      }
+    }
+  };
+
+  doc.body.childNodes.forEach(node => processNode(node));
+
+  // If no paragraphs were added (e.g. just raw text in body), do one final pass
+  if (paragraphs.length === 0 && doc.body.textContent?.trim()) {
+    processElement(doc.body as any);
+  }
+
+  return paragraphs;
+}
+
+function htmlToDocxRuns(html: string, options: { bold?: boolean, size?: number, color?: string, italic?: boolean } = {}): TextRun[] {
+  if (!html) return [];
+  
+  // Basic HTML parser for <b>, <i>, <u>, <strong>, <em>, <span> with style, and line breaks
+  const runs: TextRun[] = [];
+  
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+  
+  const processNode = (node: Node, currentStyle: any) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = node.textContent || '';
+      if (text.trim() || text === ' ') {
+        runs.push(new TextRun({
+          text,
+          bold: currentStyle.bold,
+          italics: currentStyle.italic,
+          underline: currentStyle.underline ? {} : undefined,
+          size: currentStyle.size || options.size || 22,
+          color: currentStyle.color || options.color,
+          font: currentStyle.font || (isArabic(text) ? "Amiri" : "Times New Roman")
+        }));
+      }
+    } else if (node.nodeType === Node.ELEMENT_NODE) {
+      const el = node as HTMLElement;
+      const nextStyle = { ...currentStyle };
+      
+      const tag = el.tagName.toLowerCase();
+      if (tag === 'b' || tag === 'strong') nextStyle.bold = true;
+      if (tag === 'i' || tag === 'em') nextStyle.italic = true;
+      if (tag === 'u') nextStyle.underline = true;
+      if (tag === 'br') {
+        runs.push(new TextRun({ text: "", break: 1 }));
+        return;
+      }
+      
+      if (tag === 'span' && el.style) {
+        if (el.style.fontWeight === 'bold' || parseInt(el.style.fontWeight) >= 700) nextStyle.bold = true;
+        if (el.style.fontStyle === 'italic') nextStyle.italic = true;
+        if (el.style.textDecoration === 'underline' || el.style.textDecorationLine === 'underline') nextStyle.underline = true;
+        
+        if (el.style.color) {
+          let color = el.style.color;
+          if (color.startsWith('#')) color = color.substring(1);
+          // Handle rgb converter here if needed, but hex is common
+          if (color.startsWith('rgb')) {
+             // skip complex rgb for now or add helper
+          } else {
+             nextStyle.color = color;
+          }
+        }
+        
+        if (el.style.fontSize) {
+          const sizeMatch = el.style.fontSize.match(/(\d+)(px|pt)/);
+          if (sizeMatch) {
+            const val = parseInt(sizeMatch[1]);
+            nextStyle.size = sizeMatch[2] === 'pt' ? val * 2 : Math.round(val * 1.5);
+          }
+        }
+
+        if (el.style.fontFamily) {
+          nextStyle.font = el.style.fontFamily.split(',')[0].replace(/"/g, '').trim();
+        }
+      }
+      
+      // Handle block elements by adding a break before/after if they are not the first child?
+      // Simple approach: Add a break after <p>, <div>, <li>, <h1>-<h6>
+      const isBlock = ['p', 'div', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'tr'].includes(tag);
+      
+      el.childNodes.forEach(child => processNode(child, nextStyle));
+      
+      if (isBlock && el.nextSibling) {
+        runs.push(new TextRun({ text: "", break: 1 }));
+      }
+    }
+  };
+  
+  doc.body.childNodes.forEach(node => processNode(node, { 
+    bold: options.bold, 
+    italic: options.italic,
+    color: options.color
+  }));
+  
+  return runs;
 }
 
 function cleanHtml(html: string): string {

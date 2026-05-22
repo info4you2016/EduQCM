@@ -1,4 +1,5 @@
 node_modules/
+# dist/ removed to ensure artifacts are persisted for deployment
 build/
 coverage/
 .DS_Store

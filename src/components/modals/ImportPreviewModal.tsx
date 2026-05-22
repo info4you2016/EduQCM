@@ -136,7 +136,7 @@ export const ImportPreviewModal = ({
                       <label className="text-xs font-bold text-slate-400 uppercase">Points</label>
                       <input 
                         type="number" 
-                        value={item.question.points} 
+                        value={item.question.points ?? 1} 
                         onChange={(e) => onUpdateQuestion(idx, { points: Number(e.target.value) })}
                         className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm"
                       />
@@ -154,6 +154,7 @@ export const ImportPreviewModal = ({
                          <option value="fill-in-the-blanks">Texte à trous</option>
                          <option value="ordering">Mise en ordre</option>
                          <option value="matching">Association</option>
+                         <option value="practical">Pratique</option>
                        </select>
                     </div>
                   </div>

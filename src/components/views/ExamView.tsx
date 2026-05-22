@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   Clock, CheckCircle2, Send, AlertCircle, ArrowRight, ClipboardList, 
   Sparkles, ArrowUp, ArrowDown, GripVertical, Timer, ChevronLeft, ChevronRight,
-  Info, Star
+  Info, Star, ShieldAlert, Wifi, WifiOff
 } from 'lucide-react';
+import { toast } from 'react-hot-toast';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   DndContext,
@@ -23,8 +24,8 @@ import {
   useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { api } from '../../lib/api';
-import { evaluateShortAnswer } from '../../lib/gemini';
+import { api, socket } from '../../lib/api';
+import { evaluateShortAnswer, analyzeExamResults } from '../../lib/gemini';
 import { cn, stripHtml, normalizeQuestion, getExamTotalPoints, formatDuration } from '../../lib/utils';
 import { Exam, UserProfile } from '../../types';
 import { Button } from '../ui/Button';
@@ -39,6 +40,93 @@ interface ExamViewProps {
   user: UserProfile;
   moduleName?: string;
 }
+
+// IndexedDB Persistence Helpers
+interface ExamState {
+  answers: any[];
+  currentQuestionIndex: number;
+  questions: any[];
+  startTime: number;
+  fullscreenExitsCount: number;
+  tabExitCount: number;
+  timeLeft?: number;
+}
+
+const openExamDB = (): Promise<IDBDatabase> => {
+  return new Promise((resolve, reject) => {
+    if (typeof indexedDB === 'undefined') {
+      reject(new Error('IndexedDB is not supported in this environment'));
+      return;
+    }
+    const request = indexedDB.open('ExamSafeStoreDB', 1);
+    request.onupgradeneeded = (event: any) => {
+      const db = event.target.result;
+      if (!db.objectStoreNames.contains('exam_states')) {
+        db.createObjectStore('exam_states', { keyPath: 'key' });
+      }
+    };
+    request.onsuccess = (event: any) => {
+      resolve(event.target.result);
+    };
+    request.onerror = (event: any) => {
+      reject(event.target.error || new Error('Failed to open IndexedDB'));
+    };
+  });
+};
+
+const saveExamStateIndexedDB = async (examId: number | string, userId: number | string, state: ExamState): Promise<void> => {
+  try {
+    const db = await openExamDB();
+    const transaction = db.transaction(['exam_states'], 'readwrite');
+    const store = transaction.objectStore('exam_states');
+    const key = `${examId}_${userId}`;
+    const request = store.put({ key, ...state, updatedAt: Date.now() });
+
+    return new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve();
+      request.onerror = (event: any) => reject(event.target.error || new Error('Failed to save state'));
+    });
+  } catch (err) {
+    console.error('IndexedDB save state error:', err);
+  }
+};
+
+const getExamStateIndexedDB = async (examId: number | string, userId: number | string): Promise<ExamState | null> => {
+  try {
+    const db = await openExamDB();
+    const transaction = db.transaction(['exam_states'], 'readonly');
+    const store = transaction.objectStore('exam_states');
+    const key = `${examId}_${userId}`;
+    const request = store.get(key);
+
+    return new Promise((resolve, reject) => {
+      request.onsuccess = (event: any) => {
+        resolve(event.target.result || null);
+      };
+      request.onerror = (event: any) => reject(event.target.error || new Error('Failed to get state'));
+    });
+  } catch (err) {
+    console.error('IndexedDB get state error:', err);
+    return null;
+  }
+};
+
+const clearExamStateIndexedDB = async (examId: number | string, userId: number | string): Promise<void> => {
+  try {
+    const db = await openExamDB();
+    const transaction = db.transaction(['exam_states'], 'readwrite');
+    const store = transaction.objectStore('exam_states');
+    const key = `${examId}_${userId}`;
+    const request = store.delete(key);
+
+    return new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve();
+      request.onerror = (event: any) => reject(event.target.error || new Error('Failed to clear state'));
+    });
+  } catch (err) {
+    console.error('IndexedDB clear state error:', err);
+  }
+};
 
 interface SortableItemProps {
   id: string;
@@ -110,19 +198,72 @@ const SortableItem: React.FC<SortableItemProps> = ({ id, children, index, isArab
   );
 };
 
+// Ephemeral symmetric encryption helper to prevent answers/questions manipulation in browser local storage or inspection tools
+const getExamSessionKey = (examId: number | string, userId: number | string): string => {
+  const rawKey = `exam-session-${examId}-${userId}-ephemeral-salt-4829`;
+  let hash = 0;
+  for (let i = 0; i < rawKey.length; i++) {
+    const char = rawKey.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash |= 0; // Convert to 32bit integer
+  }
+  return Math.abs(hash).toString(16) + "ePhEmErAl";
+};
+
+const encryptData = (data: any, key: string): string => {
+  try {
+    const jsonStr = JSON.stringify(data);
+    let result = '';
+    for (let i = 0; i < jsonStr.length; i++) {
+      const charCode = jsonStr.charCodeAt(i) ^ key.charCodeAt(i % key.length);
+      result += String.fromCharCode(charCode);
+    }
+    // Convert binary string to UTF-8 safe base64
+    return btoa(unescape(encodeURIComponent(result)));
+  } catch (err) {
+    console.error('[Crypto] Encryption error:', err);
+    return '';
+  }
+};
+
+const decryptData = <T = any>(encryptedStr: string | null, key: string): T | null => {
+  if (!encryptedStr) return null;
+  try {
+    // If it looks like raw JSON, parse directly as fallback to avoid breaking active sessions
+    if (encryptedStr.startsWith('{') || encryptedStr.startsWith('[')) {
+      return JSON.parse(encryptedStr) as T;
+    }
+    const rawResult = decodeURIComponent(escape(atob(encryptedStr)));
+    let result = '';
+    for (let i = 0; i < rawResult.length; i++) {
+      const charCode = rawResult.charCodeAt(i) ^ key.charCodeAt(i % key.length);
+      result += String.fromCharCode(charCode);
+    }
+    return JSON.parse(result) as T;
+  } catch (err) {
+    // If decryption fails, try standard parsing just in case
+    try {
+      return JSON.parse(encryptedStr) as T;
+    } catch {
+      console.error('[Crypto] Decryption and parsing fallback both failed:', err);
+      return null;
+    }
+  }
+};
+
 export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamViewProps) => {
   const isArabic = (text: string) => /[\u0600-\u06FF]/.test(text || '');
-  const [questions] = useState(() => {
+  const [questions, setQuestions] = useState(() => {
+    const sessionKey = getExamSessionKey(exam.id, user.id);
     const savedQs = localStorage.getItem(`exam_questions_${exam.id}_${user.id}`);
     if (savedQs) {
-      try {
-        return JSON.parse(savedQs);
-      } catch (e) {
-        console.error("Error parsing saved questions", e);
-      }
+      const decrypted = decryptData<any[]>(savedQs, sessionKey);
+      if (decrypted) return decrypted;
     }
 
-    let qs = exam.questions.map((rawQ, idx) => {
+    let qs = exam.questions
+      .filter(q => q.type !== 'practical')
+      .map((rawQ, idx) => {
       const q = normalizeQuestion(rawQ);
       if (!q.id) q.id = `q-${idx}`;
       
@@ -151,7 +292,7 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
     }
     
     // Save generated order to ensure stability across refreshes
-    localStorage.setItem(`exam_questions_${exam.id}_${user.id}`, JSON.stringify(qs));
+    localStorage.setItem(`exam_questions_${exam.id}_${user.id}`, encryptData(qs, sessionKey));
     return qs;
   });
 
@@ -159,14 +300,15 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
     const saved = localStorage.getItem(`exam_current_index_${exam.id}_${user.id}`);
     return saved ? parseInt(saved) : 0;
   });
+
+  const currentQuestion = questions[currentQuestionIndex];
+
   const [answers, setAnswers] = useState<any[]>(() => {
+    const sessionKey = getExamSessionKey(exam.id, user.id);
     const saved = localStorage.getItem(`exam_answers_${exam.id}_${user.id}`);
     if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {
-        console.error("Error parsing saved answers", e);
-      }
+      const decrypted = decryptData<any[]>(saved, sessionKey);
+      if (decrypted) return decrypted;
     }
     return questions.map(q => {
       if (q.type === 'ordering') return q.runtimeOptions.map(opt => opt.idx);
@@ -175,15 +317,491 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
       return null;
     });
   });
-  const [hasStarted, setHasStarted] = useState(false);
+  const [hasStarted, setHasStarted] = useState(() => {
+    return !!localStorage.getItem(`exam_start_${exam.id}_${user.id}`);
+  });
   const [showExitConfirm, setShowExitConfirm] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isAiGrading, setIsAiGrading] = useState(false);
   const [showCompletion, setShowCompletion] = useState(false);
   const [isAutoSubmitted, setIsAutoSubmitted] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
-  const [timeLeft, setTimeLeft] = useState(exam.durationMinutes * 60);
+  const [timeLeft, setTimeLeft] = useState(() => {
+    const saved = localStorage.getItem(`exam_time_left_${exam.id}_${user.id}`);
+    return saved ? parseInt(saved, 10) : exam.durationMinutes * 60;
+  });
+  const [lastSaved, setLastSaved] = useState<Date | null>(() => {
+    const savedAnswers = localStorage.getItem(`exam_answers_${exam.id}_${user.id}`);
+    return savedAnswers ? new Date() : null;
+  });
+  const [showSavedFeedback, setShowSavedFeedback] = useState(false);
+  const [extraTimeMinutes, setExtraTimeMinutes] = useState<number>(() => {
+    const saved = localStorage.getItem(`exam_extra_time_${exam.id}_${user.id}`);
+    return saved ? parseInt(saved, 10) : 0;
+  });
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [finalResult, setFinalResult] = useState<{ score: number, totalPoints: number, aiFeedback?: string } | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [focusMode, setFocusMode] = useState(false);
+  const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
+  const [isSyncSlow, setIsSyncSlow] = useState(false);
+  const [syncLatency, setSyncLatency] = useState<number | null>(null);
+
+  const hasWarned5Min = useRef(false);
+  const hasWarned1Min = useRef(false);
+
+  useEffect(() => {
+    if (!hasStarted || showCompletion || isSubmitting) return;
+
+    if (timeLeft <= 300 && timeLeft > 60 && !hasWarned5Min.current) {
+      hasWarned5Min.current = true;
+      toast("⏰ Plus que 5 minutes restantes ! C'est le moment idéal pour respirer profondément et commencer à réviser sereinement vos réponses.", {
+        duration: 8000,
+        style: {
+          borderRadius: '1.5rem',
+          background: '#fffbeb',
+          color: '#b45309',
+          fontWeight: 'bold',
+          border: '1.5px solid #fde68a',
+          boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1)',
+        }
+      });
+    }
+
+    if (timeLeft <= 60 && timeLeft > 0 && !hasWarned1Min.current) {
+      hasWarned1Min.current = true;
+      toast("🚨 Dernière minute ! Prenez une grande inspiration et vérifiez que vous avez bien coché toutes les questions.", {
+        duration: 8000,
+        style: {
+          borderRadius: '1.5rem',
+          background: '#fef2f2',
+          color: '#991b1b',
+          fontWeight: '900',
+          border: '2.5px solid #f87171',
+          boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)',
+        }
+      });
+    }
+  }, [timeLeft, hasStarted, showCompletion, isSubmitting]);
+
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      toast.success(
+        "Connexion rétablie ! Vos réponses sont synchronisées avec le serveur.",
+        {
+          duration: 5000,
+          icon: '🟢',
+          style: {
+            borderRadius: '1.5rem',
+            background: '#ecfdf5',
+            color: '#065f46',
+            fontWeight: 'bold',
+            border: '1px solid #a7f3d0'
+          }
+        }
+      );
+    };
+
+    const handleOffline = () => {
+      setIsOnline(false);
+      
+      // Vibrate if supported
+      if (typeof navigator !== 'undefined' && navigator.vibrate) {
+        navigator.vibrate([200, 100, 200]);
+      }
+      
+      toast.error(
+        "Connexion perdue. Pas de panique ! Continuez l'épreuve calmement : toutes vos réponses restent sécurisées localement et seront synchronisées dès le retour du réseau.",
+        {
+          duration: 12000,
+          icon: '🔴',
+          style: {
+            borderRadius: '2rem',
+            background: '#fff1f2',
+            color: '#9f1239',
+            fontWeight: 'bold',
+            border: '1px solid #fecdd3',
+            boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)'
+          }
+        }
+      );
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+  const [tabExitCount, setTabExitCount] = useState<number>(() => {
+    const saved = localStorage.getItem(`exam_tab_exits_${exam.id}_${user.id}`);
+    return saved ? parseInt(saved, 10) : 0;
+  });
+  const fullscreenExitStartTimeRef = useRef<number | null>(null);
+  const tabExitStartTimeRef = useRef<number | null>(null);
+  const blurStartTimeRef = useRef<number | null>(null);
+  const [fullscreenExitsCount, setFullscreenExitsCount] = useState<number>(() => {
+    const saved = localStorage.getItem(`exam_fullscreen_exits_${exam.id}_${user.id}`);
+    return saved ? parseInt(saved, 10) : 0;
+  });
+  const [isPausedByFullscreen, setIsPausedByFullscreen] = useState(false);
+  const [showFullscreenWarningModal, setShowFullscreenWarningModal] = useState(false);
+  const [showTabExitWarningModal, setShowTabExitWarningModal] = useState(false);
+  const [needsFullscreenRestore, setNeedsFullscreenRestore] = useState(() => {
+    const started = !!localStorage.getItem(`exam_start_${exam.id}_${user.id}`);
+    if (!started) return false;
+    const isFull = !!(
+      document.fullscreenElement ||
+      (document as any).webkitFullscreenElement ||
+      (document as any).mozFullScreenElement ||
+      (document as any).msFullscreenElement
+    );
+    return !isFull;
+  });
+
+  // Load and restore of state from IndexedDB in case of local cache wipes / browser restarts
+  useEffect(() => {
+    const initAndRestoreState = async () => {
+      try {
+        const savedState = await getExamStateIndexedDB(exam.id, user.id);
+        if (savedState) {
+          console.log('[SafeStore] active exam state found in IndexedDB:', savedState);
+          
+          const sessionKey = getExamSessionKey(exam.id, user.id);
+          if (savedState.questions && savedState.questions.length > 0) {
+            setQuestions(savedState.questions);
+            localStorage.setItem(`exam_questions_${exam.id}_${user.id}`, encryptData(savedState.questions, sessionKey));
+          }
+          if (savedState.answers && savedState.answers.length > 0) {
+            setAnswers(savedState.answers);
+            localStorage.setItem(`exam_answers_${exam.id}_${user.id}`, encryptData(savedState.answers, sessionKey));
+          }
+          if (typeof savedState.currentQuestionIndex === 'number') {
+            setCurrentQuestionIndex(savedState.currentQuestionIndex);
+            localStorage.setItem(`exam_current_index_${exam.id}_${user.id}`, savedState.currentQuestionIndex.toString());
+          }
+          if (typeof savedState.tabExitCount === 'number') {
+            setTabExitCount(savedState.tabExitCount);
+            localStorage.setItem(`exam_tab_exits_${exam.id}_${user.id}`, savedState.tabExitCount.toString());
+          }
+          if (typeof savedState.fullscreenExitsCount === 'number') {
+            setFullscreenExitsCount(savedState.fullscreenExitsCount);
+            localStorage.setItem(`exam_fullscreen_exits_${exam.id}_${user.id}`, savedState.fullscreenExitsCount.toString());
+          }
+          if (savedState.startTime) {
+            setHasStarted(true);
+            localStorage.setItem(`exam_start_${exam.id}_${user.id}`, savedState.startTime.toString());
+          }
+          if (typeof savedState.timeLeft === 'number') {
+            setTimeLeft(savedState.timeLeft);
+            localStorage.setItem(`exam_time_left_${exam.id}_${user.id}`, savedState.timeLeft.toString());
+          }
+        }
+      } catch (err) {
+        console.error('[SafeStore] Failed to restore state from IndexedDB:', err);
+      }
+    };
+    initAndRestoreState();
+  }, [exam.id, user.id]);
+
+  const MAX_TAB_EXITS = 3;
+
+  const enterFullscreen = async () => {
+    try {
+      const docEl = document.documentElement as any;
+      if (docEl.requestFullscreen) {
+        await docEl.requestFullscreen();
+      } else if (docEl.webkitRequestFullscreen) {
+        await docEl.webkitRequestFullscreen();
+      } else if (docEl.mozRequestFullScreen) {
+        await docEl.mozRequestFullScreen();
+      } else if (docEl.msRequestFullscreen) {
+        await docEl.msRequestFullscreen();
+      }
+    } catch (err) {
+      console.warn("Fullscreen request failed", err);
+    }
+  };
+
+  const handleRestoreFullscreen = async () => {
+    await enterFullscreen();
+    setNeedsFullscreenRestore(false);
+  };
+
+  const exitFullscreen = async () => {
+    try {
+      const doc = document as any;
+      if (doc.exitFullscreen) {
+        await doc.exitFullscreen();
+      } else if (doc.webkitExitFullscreen) {
+        await doc.webkitExitFullscreen();
+      } else if (doc.mozCancelFullScreen) {
+        await doc.mozCancelFullScreen();
+      } else if (doc.msExitFullscreen) {
+        await doc.msExitFullscreen();
+      }
+    } catch (err) {
+      console.warn("Exit fullscreen failed", err);
+    }
+  };
+
+  const [showReview, setShowReview] = useState(false);
+  const [flaggedQuestions, setFlaggedQuestions] = useState<Record<number, boolean>>(() => {
+    const sessionKey = getExamSessionKey(exam.id, user.id);
+    const saved = localStorage.getItem(`exam_flagged_${exam.id}_${user.id}`);
+    if (saved) {
+      const decrypted = decryptData<Record<number, boolean>>(saved, sessionKey);
+      if (decrypted) return decrypted;
+    }
+    return {};
+  });
+
+  const toggleFlag = (idx: number) => {
+    setFlaggedQuestions(prev => {
+      const next = { ...prev, [idx]: !prev[idx] };
+      const sessionKey = getExamSessionKey(exam.id, user.id);
+      localStorage.setItem(`exam_flagged_${exam.id}_${user.id}`, encryptData(next, sessionKey));
+      return next;
+    });
+  };
+
+
+
+
+  // Fullscreen Change Listener & Warnings
+  useEffect(() => {
+    if (!hasStarted || showCompletion || isSubmitting) return;
+
+    const handleFullscreenChange = () => {
+      const isFull = !!(
+        document.fullscreenElement ||
+        (document as any).webkitFullscreenElement ||
+        (document as any).mozFullScreenElement ||
+        (document as any).msFullscreenElement
+      );
+
+      if (!isFull) {
+        if (fullscreenExitStartTimeRef.current === null) {
+          fullscreenExitStartTimeRef.current = Date.now();
+        }
+
+        setFullscreenExitsCount(prev => {
+          const nextCount = prev + 1;
+          localStorage.setItem(`exam_fullscreen_exits_${exam.id}_${user.id}`, nextCount.toString());
+
+          const exactTime = new Date().toLocaleTimeString('fr-FR');
+          // Emit cheating alert
+          socket.emit('exam:cheat-alert', {
+            examId: exam.id,
+            studentId: user.id,
+            studentName: user.displayName,
+            registrationNumber: user.registrationNumber || '-',
+            type: 'fullscreen-exit',
+            details: `Sortie du mode Plein Écran à ${exactTime} (Tentative: ${nextCount})`,
+            timestamp: Date.now()
+          });
+
+          // Also increment tabExitCount to make it show up in Live Supervision counts immediately
+          setTabExitCount(t => t + 1);
+
+          if (nextCount >= 2) {
+            setIsPausedByFullscreen(true);
+          } else {
+            setShowFullscreenWarningModal(true);
+          }
+          return nextCount;
+        });
+      } else {
+        if (fullscreenExitStartTimeRef.current !== null) {
+          const durationSec = Math.round((Date.now() - fullscreenExitStartTimeRef.current) / 1000);
+          fullscreenExitStartTimeRef.current = null;
+
+          const exactTime = new Date().toLocaleTimeString('fr-FR');
+          socket.emit('exam:cheat-alert', {
+            examId: exam.id,
+            studentId: user.id,
+            studentName: user.displayName,
+            registrationNumber: user.registrationNumber || '-',
+            type: 'fullscreen-return',
+            details: `Retour au Plein Écran à ${exactTime} (Après une sortie de ${durationSec} secondes)`,
+            timestamp: Date.now()
+          });
+        }
+      }
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+    document.addEventListener('mozfullscreenchange', handleFullscreenChange);
+    document.addEventListener('MSFullscreenChange', handleFullscreenChange);
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('mozfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('MSFullscreenChange', handleFullscreenChange);
+    };
+  }, [hasStarted, showCompletion, isSubmitting, exam.id, user.id, user.displayName, user.registrationNumber]);
+
+  // Synchroniser la progression de l'étudiant via Socket.io
+  useEffect(() => {
+    if (!hasStarted) return;
+
+    const ansCount = answers.filter(a => a !== null && (!Array.isArray(a) || (a as any[]).every(v => v !== -1 && v !== '' && v !== null))).length;
+
+    socket.emit('exam:join-or-update', {
+      examId: exam.id,
+      studentId: user.id,
+      studentName: user.displayName,
+      registrationNumber: user.registrationNumber || '-',
+      answeredCount: ansCount,
+      totalQuestions: questions.length,
+      tabExitCount: tabExitCount,
+      status: showCompletion || isSubmitting ? 'completed' : 'active',
+      lastUpdated: Date.now(),
+      extraTimeMinutes: extraTimeMinutes,
+      timeLeft: timeLeft
+    });
+  }, [answers, tabExitCount, hasStarted, showCompletion, isSubmitting, exam.id, user.id, user.displayName, user.registrationNumber, questions.length, extraTimeMinutes, timeLeft]);
+
+  // Keyboard Shortcuts for QCM / True-False
+  useEffect(() => {
+    if (!hasStarted || showCompletion || isSubmitting || showReview) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger if user is typing in a textarea or input
+      if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
+
+      const key = e.key;
+
+      // Question types that support number keys (1-9)
+      if (currentQuestion.type === 'multiple-choice') {
+        const num = parseInt(key);
+        if (!isNaN(num) && num > 0 && num <= currentQuestion.runtimeOptions.length) {
+          handleAnswer(currentQuestion.runtimeOptions[num - 1].idx);
+        }
+      }
+
+      // True/False support (1=Vrai, 2=Faux)
+      if (currentQuestion.type === 'true-false') {
+        if (key === '1' || key.toLowerCase() === 'v') handleAnswer(0);
+        if (key === '2' || key.toLowerCase() === 'f') handleAnswer(1);
+      }
+
+      // Navigation shortcuts
+      if (key === 'ArrowRight' && currentQuestionIndex < questions.length - 1) {
+        setCurrentQuestionIndex(prev => prev + 1);
+      }
+      if (key === 'ArrowLeft' && currentQuestionIndex > 0) {
+        setCurrentQuestionIndex(prev => prev - 1);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [hasStarted, showCompletion, isSubmitting, showReview, currentQuestion, currentQuestionIndex, questions.length]);
+
+  // Anti Copy-Paste, Selection & Keyboard Shortcut Blocking Logic (Rigorous Security Platform)
+  useEffect(() => {
+    if (!hasStarted || showCompletion || isSubmitting) return;
+
+    const preventAction = (e: Event) => {
+      e.preventDefault();
+      socket.emit('exam:cheat-alert', {
+        examId: exam.id,
+        studentId: user.id,
+        studentName: user.displayName,
+        registrationNumber: user.registrationNumber || '-',
+        type: `blocked-${e.type}`,
+        details: `Tentative de ${
+          e.type === 'copy' ? 'copie' : 
+          e.type === 'cut' ? 'coupe' : 
+          e.type === 'paste' ? 'colle' : 
+          e.type === 'selectstart' ? 'sélection de texte' :
+          e.type === 'dragstart' ? 'glisser-déposer de texte' :
+          'clic-droit (menu contextuel)'
+        } bloquée`,
+        timestamp: Date.now()
+      });
+      return false;
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isControl = e.ctrlKey || e.metaKey;
+      const key = e.key.toLowerCase();
+      
+      // Block Ctrl+C, Ctrl+V, Ctrl+X, Ctrl+A, Ctrl+U, Ctrl+P (Print), Ctrl+S (Save)
+      if (isControl && (key === 'c' || key === 'v' || key === 'x' || key === 'a' || key === 'u' || key === 'p' || key === 's')) {
+        e.preventDefault();
+        socket.emit('exam:cheat-alert', {
+          examId: exam.id,
+          studentId: user.id,
+          studentName: user.displayName,
+          registrationNumber: user.registrationNumber || '-',
+          type: 'shortcut-blocked',
+          details: `Raccourci de triche bloqué : ${isControl ? 'Ctrl/Cmd' : ''}+${key.toUpperCase()}`,
+          timestamp: Date.now()
+        });
+        return false;
+      }
+
+      // Block F12, Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+Shift+C (DevTools toggling)
+      if (
+        key === 'f12' || 
+        (isControl && e.shiftKey && (key === 'i' || key === 'j' || key === 'c'))
+      ) {
+        e.preventDefault();
+        socket.emit('exam:cheat-alert', {
+          examId: exam.id,
+          studentId: user.id,
+          studentName: user.displayName,
+          registrationNumber: user.registrationNumber || '-',
+          type: 'devtools-blocked',
+          details: `Raccourci DevTools bloqué : ${isControl ? 'Ctrl/Cmd' : ''}+Shift+${key.toUpperCase()}`,
+          timestamp: Date.now()
+        });
+        return false;
+      }
+    };
+
+    // Rigorous event interceptors
+    document.addEventListener('contextmenu', preventAction, { capture: true });
+    document.addEventListener('copy', preventAction, { capture: true });
+    document.addEventListener('cut', preventAction, { capture: true });
+    document.addEventListener('paste', preventAction, { capture: true });
+    document.addEventListener('selectstart', preventAction, { capture: true });
+    document.addEventListener('dragstart', preventAction, { capture: true });
+    document.addEventListener('keydown', handleKeyDown, { capture: true });
+
+    // Rigorous styling to disable selection completely
+    const previousUserSelect = document.body.style.userSelect;
+    const previousWebkitUserSelect = (document.body.style as any).webkitUserSelect;
+    const previousMsUserSelect = (document.body.style as any).msUserSelect;
+    const previousMozUserSelect = (document.body.style as any).mozUserSelect;
+
+    document.body.style.userSelect = 'none';
+    (document.body.style as any).webkitUserSelect = 'none';
+    (document.body.style as any).msUserSelect = 'none';
+    (document.body.style as any).mozUserSelect = 'none';
+
+    return () => {
+      document.removeEventListener('contextmenu', preventAction, { capture: true });
+      document.removeEventListener('copy', preventAction, { capture: true });
+      document.removeEventListener('cut', preventAction, { capture: true });
+      document.removeEventListener('paste', preventAction, { capture: true });
+      document.removeEventListener('selectstart', preventAction, { capture: true });
+      document.removeEventListener('dragstart', preventAction, { capture: true });
+      document.removeEventListener('keydown', handleKeyDown, { capture: true });
+
+      document.body.style.userSelect = previousUserSelect;
+      (document.body.style as any).webkitUserSelect = previousWebkitUserSelect;
+      (document.body.style as any).msUserSelect = previousMsUserSelect;
+      (document.body.style as any).mozUserSelect = previousMozUserSelect;
+    };
+  }, [hasStarted, showCompletion, isSubmitting, exam.id, user.id, user.displayName, user.registrationNumber]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -216,12 +834,71 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
 
   useEffect(() => {
     if (hasStarted && !showCompletion && !isSubmitting) {
-      localStorage.setItem(`exam_answers_${exam.id}_${user.id}`, JSON.stringify(answers));
+      const sessionKey = getExamSessionKey(exam.id, user.id);
+      localStorage.setItem(`exam_answers_${exam.id}_${user.id}`, encryptData(answers, sessionKey));
       localStorage.setItem(`exam_current_index_${exam.id}_${user.id}`, currentQuestionIndex.toString());
-    }
-  }, [answers, currentQuestionIndex, hasStarted, showCompletion, isSubmitting, exam.id, user.id]);
+      localStorage.setItem(`exam_time_left_${exam.id}_${user.id}`, timeLeft.toString());
 
-  const currentQuestion = questions[currentQuestionIndex];
+      // Rich persistent auto-save in IndexedDB
+      const startSaved = localStorage.getItem(`exam_start_${exam.id}_${user.id}`);
+      const startTime = startSaved ? parseInt(startSaved, 10) : Date.now();
+
+      saveExamStateIndexedDB(exam.id, user.id, {
+        answers,
+        currentQuestionIndex,
+        questions,
+        startTime,
+        fullscreenExitsCount,
+        tabExitCount,
+        timeLeft
+      }).catch(err => {
+        console.error('[SafeStore] IndexedDB auto-save failure:', err);
+      });
+    }
+  }, [answers, currentQuestionIndex, questions, hasStarted, showCompletion, isSubmitting, exam.id, user.id, fullscreenExitsCount, tabExitCount, timeLeft]);
+
+  // Dedicated automatic auto-save at regular intervals (every 30 seconds)
+  useEffect(() => {
+    if (!hasStarted || showCompletion || isSubmitting) return;
+
+    const intervalId = setInterval(() => {
+      try {
+        const sessionKey = getExamSessionKey(exam.id, user.id);
+        localStorage.setItem(`exam_answers_${exam.id}_${user.id}`, encryptData(answers, sessionKey));
+        localStorage.setItem(`exam_current_index_${exam.id}_${user.id}`, currentQuestionIndex.toString());
+        localStorage.setItem(`exam_time_left_${exam.id}_${user.id}`, timeLeft.toString());
+        localStorage.setItem(`exam_flagged_${exam.id}_${user.id}`, encryptData(flaggedQuestions, sessionKey));
+
+        const startSaved = localStorage.getItem(`exam_start_${exam.id}_${user.id}`);
+        const startTime = startSaved ? parseInt(startSaved, 10) : Date.now();
+
+        saveExamStateIndexedDB(exam.id, user.id, {
+          answers,
+          currentQuestionIndex,
+          questions,
+          startTime,
+          fullscreenExitsCount,
+          tabExitCount,
+          timeLeft
+        }).catch(err => {
+          console.error('[SafeStore] IndexedDB periodic auto-save failure:', err);
+        });
+
+        // Trigger visual reassurance feedback
+        const now = new Date();
+        setLastSaved(now);
+        setShowSavedFeedback(true);
+        const timerId = setTimeout(() => setShowSavedFeedback(false), 3000);
+
+        console.log(`[SafeStore] Sauvegarde locale automatique effectuée à ${now.toLocaleTimeString()}`);
+        return () => clearTimeout(timerId);
+      } catch (err) {
+        console.error('[SafeStore] Periodic localStorage save failure:', err);
+      }
+    }, 30000);
+
+    return () => clearInterval(intervalId);
+  }, [answers, currentQuestionIndex, questions, hasStarted, showCompletion, isSubmitting, exam.id, user.id, fullscreenExitsCount, tabExitCount, timeLeft, flaggedQuestions]);
 
   const handleSubmit = useCallback(async (isAuto = false, force = false) => {
     if (isSubmitting || showCompletion) return;
@@ -235,88 +912,40 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
     const hasShortAnswers = questions.some(q => q.type === 'short-answer');
     if (hasShortAnswers) setIsAiGrading(true);
     setIsSubmitting(true);
+    setIsAnalyzing(true);
+    setShowCompletion(true);
+
+    // Turn off full screen when exam is completed
+    exitFullscreen();
+
     localStorage.removeItem(`exam_start_${exam.id}_${user.id}`);
     localStorage.removeItem(`exam_answers_${exam.id}_${user.id}`);
     localStorage.removeItem(`exam_current_index_${exam.id}_${user.id}`);
     localStorage.removeItem(`exam_questions_${exam.id}_${user.id}`);
-    
-    const normalizeStr = (s: string) => s.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ");
-
-    const gradingPromises = questions.map(async (q, idx) => {
-      const ans = answers[idx];
-      if (!q) return { isCorrect: false, pointsEarned: 0 };
-
-      const points = q.points || 1;
-      let pointsEarned = 0;
-      let isCorrect = false;
-
-      if (q.type === 'short-answer') {
-        const studentAns = ans?.toString().trim() || '';
-        const studentAnsPlainText = stripHtml(studentAns);
-        const expectedAns = stripHtml(q.correctAnswer || '').trim();
-        
-        if (normalizeStr(studentAnsPlainText) === normalizeStr(expectedAns)) {
-          isCorrect = true;
-          pointsEarned = points;
-        } else if (studentAnsPlainText && expectedAns) {
-          try {
-            const scoreMultiplier = await evaluateShortAnswer(stripHtml(q.text), expectedAns, studentAns);
-            pointsEarned = scoreMultiplier * points;
-            isCorrect = scoreMultiplier >= 0.8; 
-          } catch (e) {
-            isCorrect = normalizeStr(studentAnsPlainText) === normalizeStr(expectedAns);
-            pointsEarned = isCorrect ? points : 0;
-          }
-        }
-      } else if (q.type === 'fill-in-the-blanks') {
-        const totalBlanks = (q.correctAnswers || []).length;
-        if (totalBlanks > 0) {
-          const correctCount = (q.correctAnswers || []).filter((ca, i) => normalizeStr(ans?.[i]?.toString() || '') === normalizeStr(ca)).length;
-          pointsEarned = (correctCount / totalBlanks) * points;
-          isCorrect = correctCount === totalBlanks;
-        }
-      } else if (q.type === 'ordering') {
-        const totalItems = (q.correctOrder || []).length;
-        if (totalItems > 0) {
-          const correctPositions = (q.correctOrder || []).filter((correctIdx, i) => ans?.[i] === correctIdx).length;
-          pointsEarned = (correctPositions / totalItems) * points;
-          isCorrect = correctPositions === totalItems;
-        }
-      } else if (q.type === 'matching') {
-        const totalMatches = (q.correctMatches || []).length;
-        if (totalMatches > 0) {
-          const correctMatches = (q.correctMatches || []).filter((correctRightIdx, i) => ans?.[i] === correctRightIdx).length;
-          pointsEarned = (correctMatches / totalMatches) * points;
-          isCorrect = correctMatches === totalMatches;
-        }
-      } else {
-        isCorrect = ans !== null && ans !== undefined && q.options?.[ans as number]?.isCorrect === true;
-        pointsEarned = isCorrect ? points : 0;
-      }
-
-      return { isCorrect, pointsEarned };
+    localStorage.removeItem(`exam_tab_exits_${exam.id}_${user.id}`);
+    localStorage.removeItem(`exam_fullscreen_exits_${exam.id}_${user.id}`);
+    localStorage.removeItem(`exam_time_left_${exam.id}_${user.id}`);
+    localStorage.removeItem(`exam_flagged_${exam.id}_${user.id}`);
+    clearExamStateIndexedDB(exam.id, user.id).catch(err => {
+      console.warn('[SafeStore] Failed to clear IndexedDB on submit:', err);
     });
 
-    const finalQuestionResults = await Promise.all(gradingPromises);
-    const totalScore = finalQuestionResults.reduce((sum, res) => sum + res.pointsEarned, 0);
-    const totalPossiblePoints = questions.reduce((sum, q) => sum + (q.points || 1), 0);
-
     try {
-      await api.results.create({
+      const alignedAnswers = exam.questions.map((originalQ, origIdx) => {
+        const qId = originalQ.id || `q-${origIdx}`;
+        const shuffledIdx = questions.findIndex(q => q.id === qId);
+        return shuffledIdx !== -1 ? answers[shuffledIdx] : null;
+      });
+
+      const response = await api.results.create({
         examId: exam.id,
-        score: totalScore,
-        totalQuestions: questions.length,
-        totalPoints: totalPossiblePoints,
-        answers: exam.questions.map((originalQ, origIdx) => {
-          const qId = originalQ.id || `q-${origIdx}`;
-          const shuffledIdx = questions.findIndex(q => q.id === qId);
-          return shuffledIdx !== -1 ? answers[shuffledIdx] : null;
-        }),
-        questionResults: exam.questions.map((originalQ, origIdx) => {
-          const qId = originalQ.id || `q-${origIdx}`;
-          const shuffledIdx = questions.findIndex(q => q.id === qId);
-          return shuffledIdx !== -1 ? finalQuestionResults[shuffledIdx] : { isCorrect: false, pointsEarned: 0 };
-        })
+        answers: alignedAnswers
+      });
+
+      setFinalResult({
+        score: response.score,
+        totalPoints: response.totalPoints,
+        aiFeedback: response.aiFeedback
       });
 
       if (!isAuto) {
@@ -327,48 +956,239 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
           colors: ['#4f46e5', '#10b981', '#f59e0b', '#ef4444']
         });
       }
-
-      setShowCompletion(true);
-      setTimeout(() => onComplete(), 3000);
     } catch (error) {
       console.error("Error submitting result:", error);
     } finally {
       setIsSubmitting(false);
-      setIsAiGrading(false);
+      setIsAnalyzing(false);
     }
   }, [answers, questions, exam, onComplete, isSubmitting, showCompletion, user.id]);
+
+  // Tab Visibility Monitoring & Blur Cheat Detection
+  useEffect(() => {
+    if (!hasStarted || showCompletion || isSubmitting) return;
+
+    const triggerCheatAlert = (type: string, details: string) => {
+      socket.emit('exam:cheat-alert', {
+        examId: exam.id,
+        studentId: user.id,
+        studentName: user.displayName,
+        registrationNumber: user.registrationNumber || '-',
+        type,
+        details,
+        timestamp: Date.now()
+      });
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        if (tabExitStartTimeRef.current === null) {
+          tabExitStartTimeRef.current = Date.now();
+        }
+
+        setTabExitCount(prev => {
+          const nextCount = prev + 1;
+          localStorage.setItem(`exam_tab_exits_${exam.id}_${user.id}`, nextCount.toString());
+          const exactTime = new Date().toLocaleTimeString('fr-FR');
+          triggerCheatAlert('tab-exit', `Sortie d'écran / Changement d'onglet à ${exactTime} (Tentative: ${nextCount}/${MAX_TAB_EXITS})`);
+          
+          if (nextCount >= MAX_TAB_EXITS) {
+            // Auto submit to penalize web searches
+            setTimeout(() => {
+              handleSubmit(true, true);
+            }, 100);
+          } else {
+            setShowTabExitWarningModal(true);
+          }
+          return nextCount;
+        });
+      } else if (document.visibilityState === 'visible') {
+        if (tabExitStartTimeRef.current !== null) {
+          const durationSec = Math.round((Date.now() - tabExitStartTimeRef.current) / 1000);
+          tabExitStartTimeRef.current = null;
+
+          const exactTime = new Date().toLocaleTimeString('fr-FR');
+          triggerCheatAlert('tab-return', `Retour sur l'onglet d'examen à ${exactTime} (Changement d'onglet / écran d'examen inactif pendant ${durationSec} secondes)`);
+        }
+      }
+    };
+
+    const handleBlur = () => {
+      if (blurStartTimeRef.current === null) {
+        blurStartTimeRef.current = Date.now();
+      }
+      const exactTime = new Date().toLocaleTimeString('fr-FR');
+      triggerCheatAlert('blur', `Perte de focus de la fenêtre à ${exactTime}`);
+    };
+
+    const handleFocus = () => {
+      if (blurStartTimeRef.current !== null) {
+        const durationSec = Math.round((Date.now() - blurStartTimeRef.current) / 1000);
+        blurStartTimeRef.current = null;
+
+        const exactTime = new Date().toLocaleTimeString('fr-FR');
+        triggerCheatAlert('focus', `Récupération de focus à ${exactTime} (Fenêtre inactive pendant ${durationSec} secondes)`);
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('blur', handleBlur);
+    window.addEventListener('focus', handleFocus);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('blur', handleBlur);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, [hasStarted, showCompletion, isSubmitting, exam.id, user.id, user.displayName, user.registrationNumber, handleSubmit]);
+
+  // Écouter les commandes distantes d'un enseignant (arrêt forcé, rallonge de temps)
+  useEffect(() => {
+    const handleRemoteTrigger = (data: { examId: number; action: 'stop' | 'add-time'; amount?: number }) => {
+      if (data.examId !== exam.id) return;
+      
+      if (data.action === 'stop') {
+        setIsAutoSubmitted(true);
+        handleSubmit(true, true);
+      } else if (data.action === 'add-time') {
+        const addedMinutes = data.amount || 10;
+        setExtraTimeMinutes(prev => {
+          const next = prev + addedMinutes;
+          localStorage.setItem(`exam_extra_time_${exam.id}_${user.id}`, next.toString());
+          return next;
+        });
+      }
+    };
+
+    socket.on('exam:remote-trigger', handleRemoteTrigger);
+    return () => {
+      socket.off('exam:remote-trigger', handleRemoteTrigger);
+    };
+  }, [exam.id, handleSubmit, user.id]);
 
   const [startTime] = useState(() => {
     const saved = localStorage.getItem(`exam_start_${exam.id}_${user.id}`);
     if (saved) {
-      setHasStarted(true);
       return parseInt(saved);
     }
     return Date.now();
   });
 
-  const handleStartExam = () => {
+  // Synchronize the timer with the secure server-side clock
+  const syncTimerWithServer = useCallback(async () => {
+    try {
+      if (!isOnline) {
+        setIsSyncSlow(false);
+        setSyncLatency(null);
+        return; // Skip if offline to preserve focus and run on local monotonic decrement
+      }
+      const syncStart = Date.now();
+      const response = await api.exams.timeSync(Number(exam.id));
+      const syncEnd = Date.now();
+      const latency = syncEnd - syncStart;
+      setSyncLatency(latency);
+      
+      // If server sync takes more than 1500ms, flag as slow
+      if (latency > 1500) {
+        setIsSyncSlow(true);
+      } else {
+        setIsSyncSlow(false);
+      }
+
+      if (response && response.success) {
+        const elapsedSeconds = Math.floor((response.serverTime - response.startTime) / 1000);
+        const serverRemaining = Math.max(0, ((exam.durationMinutes + extraTimeMinutes) * 60) - elapsedSeconds);
+        
+        // Authoritative override
+        setTimeLeft(serverRemaining);
+        
+        // Monitor if local system clock differs excessively (>15s) and notify peacefully
+        const localElapsed = Math.floor((Date.now() - startTime) / 1000);
+        const diff = Math.abs(localElapsed - elapsedSeconds);
+        if (diff > 15) {
+          toast.success("Chronomètre synchronisé en temps réel avec le serveur.", {
+            duration: 3000,
+            icon: '⏰',
+            style: {
+              borderRadius: '1.5rem',
+              background: '#f8fafc',
+              color: '#334155',
+              fontWeight: 'bold',
+              border: '1px solid #e2e8f0'
+            }
+          });
+        }
+      }
+    } catch (err) {
+      console.warn("Server timer sync failed; relying on secure local monotonic clock fallback.", err);
+      if (isOnline) {
+        setIsSyncSlow(true);
+      }
+    }
+  }, [exam.id, exam.durationMinutes, extraTimeMinutes, startTime, isOnline]);
+
+  const handleStartExam = async () => {
     const now = Date.now();
     localStorage.setItem(`exam_start_${exam.id}_${user.id}`, now.toString());
     setHasStarted(true);
+    await enterFullscreen();
+    // Immediate eager sync
+    setTimeout(() => {
+      syncTimerWithServer();
+    }, 150);
   };
 
+  // Initial sync once started
+  useEffect(() => {
+    if (hasStarted) {
+      syncTimerWithServer();
+    }
+  }, [hasStarted, syncTimerWithServer]);
+
+  // Periodic time-sync every 30 seconds to prevent clock hacking
   useEffect(() => {
     if (!hasStarted || showCompletion || isSubmitting) return;
+
+    const syncInterval = setInterval(() => {
+      syncTimerWithServer();
+    }, 30000);
+
+    return () => clearInterval(syncInterval);
+  }, [hasStarted, showCompletion, isSubmitting, syncTimerWithServer]);
+
+  // Smooth local 1-second interval countdown ticks (fully system-clock independent and monotonic)
+  useEffect(() => {
+    if (!hasStarted || showCompletion || isSubmitting) return;
+
     const updateTimer = () => {
-      const elapsed = Math.floor((Date.now() - startTime) / 1000);
-      const remaining = Math.max(0, (exam.durationMinutes * 60) - elapsed);
-      setTimeLeft(remaining);
-      if (remaining <= 0) {
+      let timeIsUp = false;
+      setTimeLeft((prev) => {
+        const next = Math.max(0, prev - 1);
+        if (prev > 0 && next <= 0) {
+          timeIsUp = true;
+        }
+        return next;
+      });
+
+      if (timeIsUp) {
         handleSubmit(true);
         return false;
       }
       return true;
     };
-    if (!updateTimer()) return;
-    const timer = setInterval(() => { if (!updateTimer()) clearInterval(timer); }, 1000);
+
+    const timer = setInterval(() => {
+      if (!updateTimer()) clearInterval(timer);
+    }, 1000);
+
     return () => clearInterval(timer);
-  }, [startTime, exam.durationMinutes, showCompletion, isSubmitting, handleSubmit, hasStarted]);
+  }, [showCompletion, isSubmitting, handleSubmit, hasStarted]);
+
+  // Guaranteed Auto-submission when timer expires
+  useEffect(() => {
+    if (hasStarted && !showCompletion && !isSubmitting && timeLeft <= 0) {
+      handleSubmit(true);
+    }
+  }, [hasStarted, showCompletion, isSubmitting, timeLeft, handleSubmit]);
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -400,8 +1220,14 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
   if (!currentQuestion) return null;
 
   const progress = ((currentQuestionIndex + 1) / questions.length) * 100;
-  const answeredCount = answers.filter(a => a !== null && (!Array.isArray(a) || a.every(v => v !== -1))).length;
+  const answeredCount = answers.filter(a => a !== null && (!Array.isArray(a) || (a as any[]).every(v => v !== -1 && v !== '' && v !== null))).length;
   const qAr = isArabic(currentQuestion.text);
+
+  const stats = {
+    answered: answeredCount,
+    unanswered: questions.length - answeredCount,
+    total: questions.length
+  };
 
   if (!hasStarted) {
     return (
@@ -419,6 +1245,11 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
                 </div>
                 <h2 className="text-4xl md:text-6xl font-black text-slate-900 leading-tight tracking-tight uppercase font-display italic">{exam.title}</h2>
                 <div className="flex flex-wrap justify-center gap-3">
+                   {exam.disableCopyPaste && (
+                     <div className="flex items-center gap-2 px-4 py-2 bg-rose-50 border border-rose-100 rounded-xl text-xs font-bold text-rose-600 animate-pulse">
+                       <ShieldAlert className="w-4 h-4" /> Sécurisé (Anti-Copie)
+                     </div>
+                   )}
                    <div className="flex items-center gap-2 px-4 py-2 bg-slate-50 border border-slate-100 rounded-xl text-xs font-bold text-slate-500">
                      <Clock className="w-4 h-4" /> {formatDuration(exam.durationMinutes)}
                    </div>
@@ -470,8 +1301,74 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
     );
   }
 
+  if (needsFullscreenRestore) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="max-w-md w-full"
+        >
+          <Card className="p-1 border-2 border-slate-800 overflow-hidden rounded-[3rem] bg-slate-900 shadow-2xl">
+            <div className="bg-slate-950 p-10 md:p-12 text-center rounded-[2.8rem] space-y-8 border border-slate-800/50">
+              <div className="w-16 h-16 bg-indigo-500/10 rounded-2xl flex items-center justify-center mx-auto text-indigo-400">
+                <Timer className="w-8 h-8 animate-pulse" />
+              </div>
+              <div className="space-y-3">
+                <span className="px-3 py-1 bg-indigo-500/10 text-indigo-400 rounded-full text-[10px] font-black uppercase tracking-widest border border-indigo-500/20">Session en Cours</span>
+                <h3 className="text-2xl font-black text-white uppercase tracking-tight font-display italic">Plein Écran Requis</h3>
+                <p className="text-slate-400 font-medium text-sm leading-relaxed">
+                  L'examen sécurisé {exam.title} est déjà en cours. Pour continuer l'épreuve sans interruption, veuillez réactiver le mode Plein Écran.
+                </p>
+              </div>
+              <Button 
+                onClick={handleRestoreFullscreen} 
+                className="w-full py-5 bg-indigo-600 hover:bg-indigo-700 text-white font-black uppercase tracking-[0.1em] rounded-2xl shadow-lg shadow-indigo-500/10 h-auto"
+              >
+                Réactiver Plein Écran
+              </Button>
+            </div>
+          </Card>
+        </motion.div>
+      </div>
+    );
+  }
+
   return (
-    <div className="max-w-5xl mx-auto space-y-8 relative pb-32">
+    <div className={cn(
+      "min-h-screen bg-slate-50 transition-colors duration-500",
+      focusMode ? "bg-white" : "bg-slate-50"
+    )}>
+    <div className="max-w-7xl mx-auto px-4 py-8 space-y-8 relative pb-32">
+      <div className="fixed top-4 right-4 z-[60] pointer-events-auto">
+        <div className={cn(
+          "px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-[0.15em] shadow-lg flex items-center gap-2 backdrop-blur-md transition-all duration-300 border",
+          isOnline 
+            ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" 
+            : "bg-rose-500/10 text-rose-500 border-rose-500/20 animate-pulse"
+        )}>
+          {isOnline ? (
+            <>
+              <Wifi className="w-3.5 h-3.5 text-emerald-500" />
+              <span className="w-2 h-2 rounded-full bg-emerald-500" />
+              <span>En ligne</span>
+            </>
+          ) : (
+            <>
+              <WifiOff className="w-3.5 h-3.5 text-rose-500" />
+              <span className="w-2 h-2 rounded-full bg-rose-50 animate-ping" />
+              <span className="text-rose-600 font-bold">Hors ligne (Sécurisé Localement)</span>
+            </>
+          )}
+        </div>
+      </div>
+      {exam.disableCopyPaste && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[60] pointer-events-none">
+          <div className="bg-rose-600/90 text-white px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-[0.2em] shadow-lg flex items-center gap-2 backdrop-blur-sm">
+            <ShieldAlert className="w-4 h-4" /> Mode Protégé : Copie interdite
+          </div>
+        </div>
+      )}
       <AnimatePresence>
         {showExitConfirm && (
           <Modal title="Quitter l'examen ?" onClose={() => setShowExitConfirm(false)}>
@@ -492,144 +1389,605 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
                      localStorage.removeItem(`exam_answers_${exam.id}_${user.id}`);
                      localStorage.removeItem(`exam_current_index_${exam.id}_${user.id}`);
                      localStorage.removeItem(`exam_questions_${exam.id}_${user.id}`);
-                     onCancel();
+                     localStorage.removeItem(`exam_tab_exits_${exam.id}_${user.id}`);
+                      localStorage.removeItem(`exam_fullscreen_exits_${exam.id}_${user.id}`);
+                      localStorage.removeItem(`exam_time_left_${exam.id}_${user.id}`);
+                      localStorage.removeItem(`exam_flagged_${exam.id}_${user.id}`);
+                      onCancel();
                    }} 
                    className="flex-1 h-14 font-black uppercase text-xs"
                  >
                    Quitter
                  </Button>
                </div>
-            </div>
+             </div>
           </Modal>
         )}
         {showConfirmModal && (
           <Modal title="Confirmer la soumission" onClose={() => setShowConfirmModal(false)}>
             <div className="p-5 sm:p-8 space-y-6">
-              <div className="flex flex-col sm:flex-row items-center gap-5 p-6 bg-amber-50 rounded-3xl border border-amber-100">
-                <AlertCircle className="w-10 h-10 text-amber-600 shrink-0" />
-                <div className="space-y-1 text-center sm:text-left">
-                  <p className="text-lg font-black text-amber-900">Attention</p>
-                  <p className="text-sm font-medium text-amber-700">Vous n'avez pas répondu à toutes les questions ({answeredCount}/{questions.length}).</p>
+              {answeredCount === questions.length ? (
+                <>
+                  <div className="flex flex-col sm:flex-row items-center gap-5 p-6 bg-emerald-50 rounded-3xl border border-emerald-100">
+                    <CheckCircle2 className="w-10 h-10 text-emerald-600 shrink-0" />
+                    <div className="space-y-1 text-center sm:text-left">
+                      <p className="text-lg font-black text-emerald-950">Tout est prêt !</p>
+                      <p className="text-sm font-medium text-emerald-700">Vous avez répondu à toutes les questions ({answeredCount}/{questions.length}).</p>
+                    </div>
+                  </div>
+                  <p className="text-slate-600 font-medium leading-relaxed sm:text-center px-2">
+                    Voulez-vous vraiment soumettre vos réponses et terminer l'examen ? Une fois soumis, vous ne pourrez plus modifier vos réponses.
+                  </p>
+                  <div className="flex flex-col sm:flex-row gap-4">
+                    <Button variant="outline" onClick={() => setShowConfirmModal(false)} className="flex-1 order-2 sm:order-1">Retourner à l'examen</Button>
+                    <Button 
+                      onClick={() => { setShowConfirmModal(false); handleSubmit(false, true); }}
+                      className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white border-none order-1 sm:order-2"
+                    >
+                      Soumettre l'examen
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex flex-col sm:flex-row items-center gap-5 p-6 bg-amber-50 rounded-3xl border border-amber-100">
+                    <AlertCircle className="w-10 h-10 text-amber-600 shrink-0" />
+                    <div className="space-y-1 text-center sm:text-left">
+                      <p className="text-lg font-black text-amber-900">Attention</p>
+                      <p className="text-sm font-medium text-amber-700">Vous n'avez pas répondu à toutes les questions ({answeredCount}/{questions.length}).</p>
+                    </div>
+                  </div>
+                  <p className="text-slate-600 font-medium leading-relaxed sm:text-center px-2">
+                    Il reste des questions sans réponse. Voulez-vous vraiment terminer l'examen maintenant ? Vos réponses actuelles seront enregistrées.
+                  </p>
+                  <div className="flex flex-col sm:flex-row gap-4">
+                    <Button variant="outline" onClick={() => setShowConfirmModal(false)} className="flex-1 order-2 sm:order-1">Continuer l'examen</Button>
+                    <Button 
+                      onClick={() => { setShowConfirmModal(false); handleSubmit(false, true); }}
+                      className="flex-1 bg-amber-600 hover:bg-amber-700 text-white border-none order-1 sm:order-2"
+                    >
+                      Terminer quand même
+                    </Button>
+                  </div>
+                </>
+              )}
+            </div>
+          </Modal>
+        )}
+        {isPausedByFullscreen && (
+          <div className="fixed inset-0 z-[100] bg-slate-900/95 backdrop-blur-xl flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className="max-w-xl w-full bg-white p-10 rounded-[2.5rem] shadow-2xl text-center space-y-8 border-4 border-amber-500"
+            >
+              <div className="mx-auto w-20 h-20 bg-amber-50 rounded-3xl flex items-center justify-center border-2 border-amber-200 text-amber-500 animate-pulse font-bold">
+                <ShieldAlert className="w-10 h-10" />
+              </div>
+              <div className="space-y-4">
+                <h3 className="text-3xl font-black text-slate-900 tracking-tight font-display">
+                  Respect du Plein Écran
+                </h3>
+                <p className="text-slate-500 text-sm font-semibold leading-relaxed">
+                  L'examen a été mis en pause car vous avez quitté le mode plein écran à plusieurs reprises ({fullscreenExitsCount} fois). Le minuteur est actuellement suspendu.
+                </p>
+                <p className="text-amber-600 text-xs font-bold bg-amber-50/50 p-3 rounded-2xl border border-amber-100/50">
+                  Règle de sécurité : Vous devez impérativement rester en mode Plein Écran jusqu'à la soumission de votre copie. Tout manquement est signalé en temps réel.
+                </p>
+              </div>
+              <Button 
+                onClick={async () => {
+                  await enterFullscreen();
+                  setIsPausedByFullscreen(false);
+                }} 
+                className="w-full py-5 h-auto bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl text-sm font-black uppercase tracking-widest flex items-center justify-center gap-2 shadow-xl"
+              >
+                Réactiver le Plein Écran & Reprendre
+              </Button>
+            </motion.div>
+          </div>
+        )}
+
+        {showFullscreenWarningModal && (
+          <Modal title="Plein Écran Obligatoire" onClose={() => {}}>
+            <div className="p-8 space-y-6">
+              <div className="flex items-center gap-5 p-6 bg-amber-50 rounded-3xl border border-amber-100 text-amber-700">
+                <ShieldAlert className="w-10 h-10 shrink-0" />
+                <div>
+                  <p className="text-lg font-black uppercase tracking-tight">Avertissement de Sécurité</p>
+                  <p className="text-sm font-medium opacity-90 font-bold text-rose-600">
+                    Vous avez quitté le mode plein écran ({fullscreenExitsCount}/2 tentatives).
+                  </p>
                 </div>
               </div>
-              <p className="text-slate-600 font-medium leading-relaxed sm:text-center px-2">
-                Il reste des questions sans réponse. Voulez-vous vraiment terminer l'examen maintenant ? Vos réponses actuelles seront enregistrées.
+              <p className="text-slate-500 text-sm font-medium leading-relaxed">
+                Le mode plein écran est obligatoire pour cet examen afin de garantir l'équité de l'évaluation. Vous devez y retourner pour continuer.
               </p>
-              <div className="flex flex-col sm:flex-row gap-4">
-                <Button variant="outline" onClick={() => setShowConfirmModal(false)} className="flex-1 order-2 sm:order-1">Continuer l'examen</Button>
+              <div className="pt-4">
                 <Button 
-                  onClick={() => { setShowConfirmModal(false); handleSubmit(false, true); }}
-                  className="flex-1 bg-amber-600 hover:bg-amber-700 text-white border-none order-1 sm:order-2"
+                  onClick={async () => {
+                    await enterFullscreen();
+                    setShowFullscreenWarningModal(false);
+                  }} 
+                  className="w-full py-5 h-auto bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl text-sm font-black uppercase tracking-widest"
                 >
-                  Terminer quand même
+                  Retourner en Plein Écran
                 </Button>
               </div>
             </div>
           </Modal>
         )}
-        {showCompletion && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-0 sm:p-4">
+
+        {showTabExitWarningModal && (
+          <Modal title="Changement d'onglet détecté" onClose={() => {}}>
+            <div className="p-8 space-y-6">
+              <div className="flex items-center gap-5 p-6 bg-orange-50 rounded-3xl border border-orange-100 text-orange-700">
+                <AlertCircle className="w-10 h-10 shrink-0" />
+                <div>
+                  <p className="text-lg font-black uppercase tracking-tight">Activité Suspecte</p>
+                  <p className="text-sm font-medium opacity-90 font-bold text-rose-600">
+                    Tentative d'abandon de focus ({tabExitCount}/{MAX_TAB_EXITS}).
+                  </p>
+                </div>
+              </div>
+              <div className="space-y-4 text-sm text-slate-500 font-medium leading-relaxed">
+                <p>
+                  Le changement d'onglet ou d'application est strictement surveillé pour éviter les recherches Web non autorisées ou les tricheries.
+                </p>
+                <p className="font-bold text-rose-500 bg-rose-50 border border-rose-100 p-3 rounded-2xl">
+                  Attention : En cas de {MAX_TAB_EXITS} alertes d'abandon d'onglet, votre examen sera AUTOMATIQUEMENT SOUMIS avec vos réponses actuelles et clôturé définitivement.
+                </p>
+              </div>
+              <div className="pt-4">
+                <Button 
+                  onClick={() => {
+                    setShowTabExitWarningModal(false);
+                  }} 
+                  className="w-full py-5 h-auto bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl text-sm font-black uppercase tracking-widest"
+                >
+                  Accepter & Continuer l'Examen
+                </Button>
+              </div>
+            </div>
+          </Modal>
+        )}
+        {showCompletion && finalResult && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-0 sm:p-4 overflow-y-auto">
             <motion.div 
-              initial={{ scale: 0.95, opacity: 0, y: 20 }} 
+              initial={{ scale: 0.9, opacity: 0, y: 30 }} 
               animate={{ scale: 1, opacity: 1, y: 0 }}
-              className="bg-white p-8 sm:p-12 rounded-none sm:rounded-[3.5rem] shadow-2xl max-w-md w-full h-full sm:h-auto flex flex-col justify-center space-y-6"
+              className="bg-white p-8 sm:p-12 rounded-[2.5rem] sm:rounded-[3.5rem] shadow-2xl max-w-md w-full my-auto flex flex-col items-center space-y-12 relative overflow-hidden"
             >
-              <div className="w-20 h-20 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-2">
-                <CheckCircle2 className="w-10 h-10" />
+              <div className="absolute top-0 left-0 w-full h-2 bg-orange-400" />
+              
+              {/* Circular Progress */}
+              <div className="relative flex items-center justify-center pt-8">
+                <svg className="w-48 h-48 transform -rotate-90">
+                  <circle
+                    cx="96"
+                    cy="96"
+                    r="88"
+                    stroke="#f8fafc"
+                    strokeWidth="12"
+                    fill="transparent"
+                  />
+                  <motion.circle
+                    cx="96"
+                    cy="96"
+                    r="88"
+                    stroke="#fbbf24"
+                    strokeWidth="12"
+                    fill="transparent"
+                    strokeDasharray={2 * Math.PI * 88}
+                    initial={{ strokeDashoffset: 2 * Math.PI * 88 }}
+                    animate={{ strokeDashoffset: (2 * Math.PI * 88) * (1 - (finalResult.score / finalResult.totalPoints)) }}
+                    transition={{ duration: 1.5, ease: "easeOut" }}
+                    strokeLinecap="round"
+                  />
+                </svg>
+                <div className="absolute inset-0 flex flex-col items-center justify-center">
+                  <span className="text-5xl font-black text-slate-900 leading-none">
+                    {Math.round((finalResult.score / finalResult.totalPoints) * 100)}%
+                  </span>
+                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-2">Score Total</span>
+                </div>
+                
+                {/* Trophy Badge */}
+                <div className="absolute top-4 right-4 bg-amber-400 p-3 rounded-2xl shadow-lg shadow-amber-100 transform rotate-12">
+                   <Star className="w-6 h-6 text-white fill-white" />
+                </div>
               </div>
-              <div className="space-y-2">
-                <h3 className="text-3xl font-black text-slate-900 tracking-tight">{isAutoSubmitted ? "Temps écoulé !" : "Félicitations !"}</h3>
-                <p className="text-slate-500 font-medium px-4">Votre examen a été soumis avec succès. Nous calculons vos résultats.</p>
+
+              {/* Message Header */}
+              <div className="text-center space-y-4">
+                <h3 className="text-4xl font-black text-slate-900 tracking-tight">
+                  {Math.round((finalResult.score / finalResult.totalPoints) * 100) >= 80 ? "Excellent !" : 
+                   Math.round((finalResult.score / finalResult.totalPoints) * 100) >= 50 ? "Bien joué !" : 
+                   "Encore un effort !"}
+                </h3>
+                <p className="text-slate-500 font-medium">
+                  Vous avez validé <span className="font-black text-slate-900">{Number.isInteger(finalResult.score) ? finalResult.score : finalResult.score.toFixed(1)}</span> points sur un maximum de <span className="font-black text-slate-900">{finalResult.totalPoints}</span>.
+                </p>
               </div>
-              <div className="flex items-center justify-center gap-3 py-2">
-                <div className="w-2 h-2 rounded-full bg-indigo-600 animate-bounce" style={{ animationDelay: '0ms' }} />
-                <div className="w-2 h-2 rounded-full bg-indigo-600 animate-bounce" style={{ animationDelay: '150ms' }} />
-                <div className="w-2 h-2 rounded-full bg-indigo-600 animate-bounce" style={{ animationDelay: '300ms' }} />
+
+              {/* AI Feedback Section */}
+              <AnimatePresence>
+                {(isAnalyzing || finalResult.aiFeedback) && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="w-full bg-indigo-50/50 rounded-[2rem] p-6 border border-indigo-100/50 space-y-3"
+                  >
+                    <div className="flex items-center gap-2 mb-2">
+                       <Sparkles className={cn("w-4 h-4 text-indigo-600", isAnalyzing && "animate-pulse")} />
+                       <span className="text-[10px] font-black text-indigo-600 uppercase tracking-[0.2em]">Analyse de l'Assistant IA</span>
+                    </div>
+                    {isAnalyzing ? (
+                      <div className="space-y-2">
+                        <div className="h-4 bg-indigo-100/50 rounded-full animate-pulse w-full" />
+                        <div className="h-4 bg-indigo-100/50 rounded-full animate-pulse w-3/4" />
+                        <div className="h-4 bg-indigo-100/50 rounded-full animate-pulse w-5/6" />
+                      </div>
+                    ) : (
+                      <div className="text-sm text-slate-600 font-medium leading-relaxed max-h-[300px] overflow-y-auto custom-scrollbar pr-2 whitespace-pre-wrap">
+                        {finalResult.aiFeedback}
+                      </div>
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* Stats Cards */}
+              <div className="grid grid-cols-2 gap-4 w-full">
+                <div className="bg-slate-50/50 p-6 rounded-[2rem] border border-slate-100 flex flex-col items-center justify-center gap-2">
+                  <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600 mb-1">
+                    <CheckCircle2 className="w-5 h-5" />
+                  </div>
+                  <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none">Précision</span>
+                  <span className="text-lg font-black text-slate-900">{Math.round((finalResult.score / finalResult.totalPoints) * 100)}%</span>
+                </div>
+                <div className="bg-slate-50/50 p-6 rounded-[2rem] border border-slate-100 flex flex-col items-center justify-center gap-2">
+                  <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 mb-1">
+                    <Clock className="w-5 h-5" />
+                  </div>
+                  <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none">Status</span>
+                  <span className="text-lg font-black text-slate-900">{Math.round((finalResult.score / finalResult.totalPoints) * 100) >= 50 ? "Validé" : "À refaire"}</span>
+                </div>
               </div>
+
+              {exam.questions.some(q => q.type === 'practical') && (
+                <div className="w-full flex items-center gap-4 p-5 bg-amber-50/50 border border-amber-100/50 rounded-[2rem] text-amber-800">
+                  <div className="w-10 h-10 rounded-2xl bg-amber-100 flex items-center justify-center text-amber-600 shrink-0">
+                    <Info className="w-5 h-5" />
+                  </div>
+                  <p className="text-[10px] font-bold leading-relaxed italic">
+                    Note: Cet examen comporte une partie pratique de {getExamTotalPoints(exam) - questions.reduce((s, q) => s + (q.points || 1), 0)} points qui sera évaluée séparément par votre formateur.
+                  </p>
+                </div>
+              )}
+
+              {/* Continue Button */}
+              <Button 
+                onClick={() => onComplete()} 
+                disabled={isSubmitting}
+                className="w-full py-6 h-auto bg-slate-900 hover:bg-black text-white rounded-[2rem] text-sm font-black uppercase tracking-[0.2em] shadow-2xl shadow-slate-200"
+              >
+                {isSubmitting ? (
+                  <span className="flex items-center gap-2">
+                    <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+                    Sauvegarde en cours...
+                  </span>
+                ) : "Continuer"}
+              </Button>
             </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Modern Header (Static) */}
-      <div className="bg-white border-b border-slate-100 -mx-4 px-4 py-4 md:py-6 mb-8 md:mb-12 flex flex-col md:flex-row items-center justify-between gap-4 md:gap-6">
-        <div className="flex items-center gap-4 md:gap-6 w-full md:w-auto">
-          <div className={cn(
-            "flex items-center gap-2 md:gap-4 px-4 md:px-6 py-2 md:py-3 rounded-xl md:2xl border-2 transition-all shrink-0",
-            timeLeft < 60 ? "bg-rose-50 border-rose-200 text-rose-600 animate-pulse" : "bg-white border-slate-100 text-slate-900"
-          )}>
-            <Timer className={cn("w-5 h-5 md:w-6 md:h-6", timeLeft < 60 ? "text-rose-500" : "text-indigo-600")} />
-            <span className="font-mono text-xl md:text-2xl font-black">{formatTime(timeLeft)}</span>
-          </div>
-          <div className="flex-1 md:w-64 space-y-1.5 md:space-y-2">
-            <div className="flex justify-between items-end">
-              <span className="text-[9px] md:text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">Progression</span>
-              <span className="text-[9px] md:text-[10px] font-black text-indigo-600 uppercase tracking-widest leading-none">{Math.round(progress)}%</span>
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+        {/* Progress Sidebar */}
+        <div className={cn(
+          "lg:col-span-3 space-y-6 hidden lg:block sticky top-8 transition-all duration-300",
+          focusMode && "opacity-0 pointer-events-none translate-x-[-20px] absolute"
+        )}>
+          <Card className="p-6 border-none shadow-xl shadow-slate-200/50 space-y-6 rounded-[2.5rem] bg-white">
+            <div className="flex items-center justify-between mb-4">
+              <div className="bg-slate-100 p-1 rounded-xl flex">
+                <button 
+                  onClick={() => setShowReview(false)}
+                  className={cn("px-3 py-1.5 text-[9px] font-black uppercase tracking-tight rounded-lg transition-all", !showReview ? "bg-white text-indigo-600 shadow-sm" : "text-slate-400")}
+                >
+                  Examen
+                </button>
+                <button 
+                  onClick={() => setShowReview(true)}
+                  className={cn("px-3 py-1.5 text-[9px] font-black uppercase tracking-tight rounded-lg transition-all", showReview ? "bg-white text-indigo-600 shadow-sm" : "text-slate-400")}
+                >
+                  Récap
+                </button>
+              </div>
+              <button 
+                onClick={() => setFocusMode(!focusMode)}
+                className="p-2 text-slate-400 hover:text-indigo-600 transition-colors"
+                title="Mode Concentration"
+              >
+                <Star className={cn("w-4 h-4", focusMode && "fill-indigo-600 text-indigo-600")} />
+              </button>
             </div>
-            <div className="h-1.5 md:h-2 w-full bg-slate-100 rounded-full overflow-hidden">
+
+            <div className="space-y-1">
+              <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest pl-1">Progression</h3>
+              <div className="flex items-center justify-between">
+                <span className="text-2xl font-black text-slate-900">{answeredCount}/{questions.length}</span>
+                <span className="text-[10px] font-black text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-lg border border-indigo-100">{Math.round(progress)}%</span>
+              </div>
+            </div>
+
+            <div className="w-full h-2 bg-slate-50 rounded-full overflow-hidden border border-slate-100">
               <motion.div 
-                initial={{ width: 0 }} 
-                animate={{ width: `${progress}%` }} 
-                className="h-full bg-indigo-600 rounded-full" 
+                initial={{ width: 0 }}
+                animate={{ width: `${progress}%` }}
+                className="h-full bg-indigo-600"
               />
             </div>
-          </div>
-        </div>
-        
-        <div className="flex items-center gap-2 md:gap-3 w-full md:w-auto">
-          <Button 
-            variant="ghost" 
-            size="sm"
-            onClick={() => setShowExitConfirm(true)} 
-            className="flex-1 md:flex-none text-slate-400 font-bold hover:text-rose-500 hover:bg-rose-50 text-[10px] md:text-xs"
-          >
-            Abandonner
-          </Button>
-          <Button 
-            onClick={() => handleSubmit()} 
-            disabled={isSubmitting}
-            size="sm"
-            className="flex-[2] md:flex-none px-6 md:px-8 shadow-lg shadow-indigo-200 border-none text-[10px] md:text-xs font-black uppercase tracking-widest"
-          >
-            Soumettre
-          </Button>
-        </div>
-      </div>
 
-      {/* Question Indicators (Top Navigator) */}
-      <div className="mb-10 max-w-5xl mx-auto">
-        <div className="flex flex-wrap justify-center gap-2 md:gap-3">
-          {questions.map((_, idx) => {
-            const isAnswered = answers[idx] !== null && (!Array.isArray(answers[idx]) || answers[idx].every(v => v !== -1));
-            const isActive = currentQuestionIndex === idx;
-            
-            return (
-              <button 
-                key={idx} 
-                onClick={() => setCurrentQuestionIndex(idx)} 
-                className={cn(
-                  "w-10 h-10 md:w-12 md:h-12 rounded-xl md:rounded-2xl border-2 font-black text-xs md:text-sm flex items-center justify-center transition-all relative group",
-                  isActive 
-                    ? "bg-indigo-600 border-indigo-600 text-white shadow-lg shadow-indigo-100 scale-110 z-10" 
-                    : isAnswered 
-                      ? "bg-white border-emerald-500 text-emerald-600 hover:bg-emerald-50" 
-                      : "bg-white border-slate-100 text-slate-400 hover:border-indigo-300 hover:text-indigo-600"
-                )}
-              >
-                {idx + 1}
-                {isAnswered && !isActive && (
-                  <div className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-emerald-500 rounded-full border-2 border-white" />
-                )}
-              </button>
-            );
-          })}
-        </div>
-      </div>
+            <div className="grid grid-cols-4 gap-2 pt-4">
+              {questions.map((_, idx) => {
+                const isAnswered = answers[idx] !== null && (!Array.isArray(answers[idx]) || (answers[idx] as any[]).every(v => v !== -1 && v !== '' && v !== null));
+                const isCurrent = idx === currentQuestionIndex && !showReview;
+                const isFlagged = flaggedQuestions[idx];
+                
+                return (
+                  <button
+                    key={idx}
+                    onClick={() => {
+                      setCurrentQuestionIndex(idx);
+                      setShowReview(false);
+                    }}
+                    className={cn(
+                      "w-full aspect-square rounded-xl flex items-center justify-center text-xs font-black transition-all border-2 relative",
+                      isCurrent 
+                        ? "bg-indigo-600 border-indigo-600 text-white shadow-lg shadow-indigo-100 scale-110" 
+                        : isAnswered 
+                          ? "bg-white border-emerald-500 text-emerald-600" 
+                          : "bg-white border-slate-100 text-slate-400 hover:border-indigo-300"
+                    )}
+                  >
+                    {idx + 1}
+                    {isFlagged && (
+                      <div className="absolute -top-1 -right-1 w-3 h-3 bg-rose-500 rounded-full border-2 border-white" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
 
-      {/* Main Question Interface */}
-      <div className="max-w-4xl mx-auto scroll-mt-32" id="current-question">
-        <div className="space-y-8">
+            <div className="pt-6 border-t border-slate-50">
+               <Button 
+                 onClick={() => setShowConfirmModal(true)} 
+                 className="w-full h-14 rounded-2xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-black uppercase tracking-widest gap-2 shadow-xl shadow-slate-200"
+               >
+                 Terminer l'examen
+               </Button>
+               <Button 
+                 variant="ghost" 
+                 onClick={() => setShowExitConfirm(true)} 
+                 className="w-full mt-2 h-10 rounded-xl text-slate-400 hover:text-rose-600 text-[10px] font-black uppercase tracking-widest"
+               >
+                 Abandonner
+               </Button>
+            </div>
+          </Card>
+
+          <Card className={cn(
+            "p-6 border transition-all duration-500 rounded-[2rem] flex flex-col items-center gap-4",
+            timeLeft <= 60 
+              ? "bg-rose-50 border-rose-200 shadow-xl shadow-rose-200/30 text-rose-800 animate-[pulse_2s_infinite]" 
+              : timeLeft <= 300 
+                ? "bg-amber-50 border-amber-200 shadow-xl shadow-amber-200/30 text-amber-800" 
+                : "bg-indigo-600 border shadow-xl shadow-slate-200/50 text-white"
+          )}>
+            <div className={cn(
+              "w-12 h-12 rounded-2xl flex items-center justify-center border transition-all duration-500",
+              timeLeft <= 60 
+                ? "bg-rose-500/10 border-rose-500/20 text-rose-600 animate-[bounce_1s_infinite]" 
+                : timeLeft <= 300 
+                  ? "bg-amber-500/10 border-amber-500/20 text-amber-600" 
+                  : "bg-white/10 border-white/20 text-white"
+            )}>
+               <Clock className="w-6 h-6" />
+            </div>
+            <div className="text-center">
+               <p className={cn(
+                 "text-[10px] font-black uppercase tracking-widest mb-1 transition-colors",
+                 timeLeft <= 60 
+                   ? "text-rose-500" 
+                   : timeLeft <= 300 
+                     ? "text-amber-600" 
+                     : "text-indigo-300"
+               )}>
+                 {timeLeft <= 60 ? "Minutes finales" : timeLeft <= 180 ? "Temps pressant" : "Temps Restant"}
+               </p>
+               <h4 className={cn(
+                 "text-3xl font-black font-mono transition-transform duration-300",
+                 timeLeft <= 60 
+                   ? "text-rose-600 font-extrabold tracking-widest text-[32px]" 
+                   : timeLeft <= 300 
+                     ? "text-amber-600" 
+                     : "text-white"
+               )}>
+                 {formatTime(timeLeft)}
+               </h4>
+               {timeLeft <= 60 && (
+                 <p className="text-[9px] font-bold text-rose-500 animate-pulse mt-1 tracking-tight uppercase">Fin imminente - Soumission automatique</p>
+                )}
+                <div className={cn(
+                  "flex flex-col gap-2 mt-3 pt-3 w-full border-t border-dashed text-center",
+                  timeLeft <= 60 ? "border-rose-200/30" : timeLeft <= 300 ? "border-amber-200/30" : "border-white/10"
+                )}>
+                  <div className="flex items-center gap-1.5 justify-center">
+                    <span className="relative flex h-1.5 w-1.5">
+                    <span className={cn(
+                      "animate-ping absolute inline-flex h-full w-full rounded-full opacity-75",
+                      timeLeft <= 60 ? "bg-rose-400" : timeLeft <= 300 ? "bg-amber-400" : "bg-emerald-400"
+                    )}></span>
+                    <span className={cn(
+                      "relative inline-flex rounded-full h-1.5 w-1.5",
+                      timeLeft <= 60 ? "bg-rose-500" : timeLeft <= 300 ? "bg-amber-500" : "bg-emerald-500"
+                    )}></span>
+                  </span>
+                  <span className={cn(
+                    "text-[8px] font-black uppercase tracking-wider transition-all duration-300",
+                    showSavedFeedback 
+                      ? "scale-105 animate-pulse font-black " + (timeLeft <= 60 ? "text-rose-600" : timeLeft <= 300 ? "text-amber-700" : "text-emerald-300")
+                      : (timeLeft <= 60 ? "text-rose-500/80" : timeLeft <= 300 ? "text-amber-600/80" : "text-white/60")
+                  )}>
+                    {showSavedFeedback ? "Sauvegarde ok !" : lastSaved ? `Sauvegardé : ${lastSaved.toLocaleTimeString()}` : "Sauvegarde active"}
+                  </span>
+                </div>
+
+                {/* Row 2: Real-time network sync status indicator */}
+                <div className="flex items-center gap-1.5 justify-center">
+                  {!isOnline ? (
+                    <>
+                      <span className="relative flex h-1.5 w-1.5">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-rose-500"></span>
+                      </span>
+                      <span className={cn(
+                        "text-[8px] font-black uppercase tracking-wider flex items-center gap-1",
+                        timeLeft <= 300 ? "text-rose-700" : "text-rose-300"
+                      )}>
+                        <WifiOff className="w-2.5 h-2.5 inline text-rose-500" /> Hors-ligne
+                      </span>
+                    </>
+                  ) : isSyncSlow ? (
+                    <>
+                      <span className="relative flex h-1.5 w-1.5">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-amber-500"></span>
+                      </span>
+                      <span className={cn(
+                        "text-[8px] font-black uppercase tracking-wider flex items-center gap-1",
+                        timeLeft <= 300 ? "text-amber-700" : "text-amber-300"
+                      )}>
+                        <Wifi className="w-2.5 h-2.5 inline text-amber-500" /> Synchro Lente ({syncLatency ? `${syncLatency}ms` : "lenteur"})
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="relative flex h-1.5 w-1.5">
+                        <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
+                      </span>
+                      <span className={cn(
+                        "text-[8px] font-black uppercase tracking-wider flex items-center gap-1",
+                        timeLeft <= 300 ? "text-emerald-700" : "text-emerald-300"
+                      )}>
+                        <Wifi className="w-2.5 h-2.5 inline text-emerald-400" /> Synchro OK ({syncLatency ? `${syncLatency}ms` : "80ms"})
+                      </span>
+                    </>
+                  )}
+                </div>
+              </div>
+
+            </div>
+          </Card>
+        </div>
+
+        {/* Question Area */}
+        <div className={cn(
+          "transition-all duration-500",
+          focusMode ? "lg:col-span-12 max-w-4xl mx-auto" : "lg:col-span-9"
+        )}>
+          {tabExitCount > 0 && (
+            <motion.div 
+               initial={{ opacity: 0, y: -20 }}
+               animate={{ opacity: 1, y: 0 }}
+               className="mb-6 p-4 bg-rose-50 border border-rose-200 rounded-2xl flex items-center gap-3 text-rose-700"
+            >
+               <AlertCircle className="w-5 h-5 shrink-0" />
+               <p className="text-xs font-black uppercase tracking-tight">Attention : Changement d'onglet détecté ({tabExitCount}/{MAX_TAB_EXITS}). La copie sera automatiquement soumise après {MAX_TAB_EXITS} tentatives d'abandon.</p>
+            </motion.div>
+          )}
+
+          <div className="max-w-4xl mx-auto scroll-mt-32" id="current-question">
+            <div className="space-y-8">
+              {focusMode && (
+                <div className="flex items-center justify-between bg-white p-4 rounded-2xl border border-slate-100 shadow-sm sticky top-4 z-40">
+                  <div className="flex items-center gap-3">
+                    <button onClick={() => setFocusMode(false)} className="p-2 hover:bg-slate-50 rounded-xl text-slate-400 transition-colors">
+                      <ChevronLeft className="w-5 h-5" />
+                    </button>
+                    <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest">{exam.title}</span>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <div className={cn(
+                      "px-4 py-1.5 rounded-xl text-sm font-black font-mono transition-all duration-300 border",
+                      timeLeft <= 60 
+                        ? "bg-rose-50 text-rose-600 border-rose-200 animate-pulse" 
+                        : timeLeft <= 300 
+                          ? "bg-amber-50 text-amber-600 border-amber-200" 
+                          : "bg-slate-50 text-slate-700 border-slate-100"
+                    )}>
+                      {formatTime(timeLeft)}
+                    </div>
+                    <Button size="sm" onClick={() => setShowConfirmModal(true)} className="rounded-xl h-9">Submit</Button>
+                  </div>
+                </div>
+              )}
+
           <AnimatePresence mode="wait">
+            {showReview ? (
+             <motion.div
+               key="review"
+               initial={{ opacity: 0, scale: 0.95 }}
+               animate={{ opacity: 1, scale: 1 }}
+               exit={{ opacity: 0, scale: 0.95 }}
+               className="bg-white p-10 rounded-[3rem] border-2 border-indigo-50 shadow-xl space-y-10"
+             >
+               <div className="text-center space-y-2">
+                 <h2 className="text-3xl font-black text-slate-900 leading-tight uppercase font-display italic">Révision de l'Examen</h2>
+                 <p className="text-slate-500 font-medium">Vérifiez vos réponses une dernière fois avant la soumission finale.</p>
+               </div>
+
+               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                 {questions.map((q, idx) => {
+                   const isAnswered = answers[idx] !== null && (!Array.isArray(answers[idx]) || (answers[idx] as any[]).every(v => v !== -1 && v !== '' && v !== null));
+                   return (
+                     <button
+                       key={q.id}
+                       onClick={() => {
+                         setCurrentQuestionIndex(idx);
+                         setShowReview(false);
+                         window.scrollTo({ top: 0, behavior: 'smooth' });
+                       }}
+                       className="p-6 rounded-[2rem] border-2 border-slate-50 hover:border-indigo-100 hover:bg-indigo-50/10 transition-all text-left flex items-start gap-4 group"
+                     >
+                       <div className={cn(
+                         "w-10 h-10 rounded-xl flex items-center justify-center font-black text-xs shrink-0 transition-all",
+                         isAnswered ? "bg-emerald-50 text-emerald-600 border border-emerald-100" : "bg-slate-100 text-slate-400"
+                       )}>
+                         {idx + 1}
+                       </div>
+                       <div className="flex-1 space-y-1">
+                          <p className="text-xs font-black text-slate-400 uppercase tracking-widest">{isAnswered ? "Répondu" : "Non répondu"}</p>
+                          <div className="text-sm font-bold text-slate-700 line-clamp-2 group-hover:text-indigo-600 transition-colors" dangerouslySetInnerHTML={{ __html: stripHtml(q.text) }} />
+                       </div>
+                     </button>
+                   );
+                 })}
+               </div>
+
+               <div className="pt-10 border-t border-slate-100 flex flex-col sm:flex-row gap-4">
+                 <Button variant="outline" onClick={() => { setShowReview(false); setCurrentQuestionIndex(0); }} className="flex-1 h-14 rounded-2xl font-black uppercase text-xs tracking-widest">
+                   Retourner à la question 1
+                 </Button>
+                 <Button onClick={() => setShowConfirmModal(true)} className="flex-1 h-14 rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl shadow-indigo-100">
+                   Valider et Soumettre l'Examen <Send className="w-4 h-4 ml-2" />
+                 </Button>
+               </div>
+             </motion.div>
+            ) : (
             <motion.div
               key={currentQuestion.id}
               initial={{ opacity: 0, y: 20 }}
@@ -640,8 +1998,33 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
             >
               <div className={cn("space-y-6 text-center", qAr ? "text-right" : "text-center")}>
                 <div className={cn("flex items-center justify-center gap-3", qAr ? "flex-row-reverse" : "")}>
-                  <span className="px-3 py-1 bg-slate-900 text-white text-[10px] font-black uppercase tracking-widest rounded-lg">Question {currentQuestionIndex + 1}</span>
-                  <span className="px-3 py-1 bg-indigo-50 text-indigo-600 text-[10px] font-black uppercase tracking-widest rounded-lg">{currentQuestion.points} Points</span>
+                  <span className="px-3 py-1 bg-slate-900 text-white text-[10px] font-black uppercase tracking-widest rounded-lg shadow-sm">Question {currentQuestionIndex + 1}</span>
+                  <span className="px-3 py-1 bg-indigo-50 text-indigo-600 text-[10px] font-black uppercase tracking-widest rounded-lg border border-indigo-100">{currentQuestion.points} Points</span>
+                  {answers[currentQuestionIndex] !== null && (!Array.isArray(answers[currentQuestionIndex]) || (answers[currentQuestionIndex] as any[]).every(v => v !== -1 && v !== '' && v !== null)) ? (
+                    <motion.span 
+                      initial={{ opacity: 0, scale: 0.8 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      className="px-3 py-1 bg-emerald-50 text-emerald-600 text-[10px] font-black uppercase tracking-widest rounded-lg border border-emerald-100 flex items-center gap-1.5 shadow-sm"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" /> Complété
+                    </motion.span>
+                  ) : (
+                    <span className="px-3 py-1 bg-amber-50 text-amber-600 text-[10px] font-black uppercase tracking-widest rounded-lg border border-amber-100 flex items-center gap-1.5 shadow-sm">
+                      <Timer className="w-3.5 h-3.5" /> En attente
+                    </span>
+                  )}
+                  <button
+                    onClick={() => toggleFlag(currentQuestionIndex)}
+                    className={cn(
+                      "px-3 py-1 rounded-lg border text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5 transition-all",
+                      flaggedQuestions[currentQuestionIndex]
+                        ? "bg-rose-50 border-rose-200 text-rose-600 shadow-sm"
+                        : "bg-white border-slate-100 text-slate-400 hover:bg-rose-50 hover:text-rose-500"
+                    )}
+                  >
+                    <Star className={cn("w-3.5 h-3.5", flaggedQuestions[currentQuestionIndex] && "fill-rose-600")} />
+                    {flaggedQuestions[currentQuestionIndex] ? "Doute" : "Marquer"}
+                  </button>
                 </div>
                 <div className={cn("flex", qAr ? "justify-end" : "justify-center")}>
                   <div className={cn(
@@ -657,16 +2040,43 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
                           <React.Fragment key={i}>
                             <span dangerouslySetInnerHTML={{ __html: part }} />
                             {i < arr.length - 1 && (
-                              <input
+                              <motion.input
+                                initial={false}
+                                animate={{
+                                  backgroundColor: answers[currentQuestionIndex]?.[i] ? "rgba(16, 185, 129, 0.05)" : "rgba(255, 255, 255, 1)",
+                                  borderColor: answers[currentQuestionIndex]?.[i] ? "#10b981" : "#e0e7ff",
+                                  width: answers[currentQuestionIndex]?.[i] 
+                                    ? Math.max(160, (answers[currentQuestionIndex]?.[i].length * 15) + 40)
+                                    : 160
+                                }}
                                 type="text"
                                 dir="auto"
                                 value={answers[currentQuestionIndex]?.[i] || ''}
                                 onChange={(e) => {
-                                  const newAns = [...(answers[currentQuestionIndex] || [])];
-                                  newAns[i] = e.target.value;
-                                  handleAnswer(newAns);
+                                  let newAns = answers[currentQuestionIndex];
+                                  if (!Array.isArray(newAns)) {
+                                    newAns = new Array(arr.length - 1).fill('');
+                                  }
+                                  const updatedAns = [...newAns];
+                                  updatedAns[i] = e.target.value;
+                                  handleAnswer(updatedAns);
                                 }}
-                                className="inline-block mx-2 px-4 py-1 bg-white border-b-4 border-indigo-200 focus:border-indigo-600 outline-none font-bold text-xl min-w-[140px] shadow-sm align-baseline transition-all text-indigo-700 placeholder:text-slate-200"
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    const inputs = document.querySelectorAll('.blank-input');
+                                    const idx = Array.prototype.indexOf.call(inputs, e.target);
+                                    if (idx < inputs.length - 1) {
+                                      (inputs[idx + 1] as HTMLElement).focus();
+                                    }
+                                  }
+                                }}
+                                className={cn(
+                                  "blank-input inline-block mx-2 px-4 py-1 border-b-4 outline-none font-bold text-xl shadow-sm align-baseline transition-all rounded-t-xl text-center",
+                                  answers[currentQuestionIndex]?.[i] 
+                                    ? "text-emerald-700" 
+                                    : "text-indigo-700 focus:border-indigo-600 focus:bg-indigo-50/5 focus:ring-4 focus:ring-indigo-500/10"
+                                )}
                                 placeholder="..."
                               />
                             )}
@@ -699,22 +2109,41 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
                             dir={optAr ? "rtl" : "ltr"}
                             className={cn(
                               "p-8 rounded-[2rem] border-2 font-bold transition-all relative group overflow-hidden flex items-center gap-6",
-                              isSelected ? "bg-indigo-50 border-indigo-600 text-indigo-600 shadow-lg shadow-indigo-100" : "bg-white border-slate-100 hover:border-slate-300 hover:bg-slate-50/50",
+                              isSelected 
+                                ? "bg-indigo-50 border-indigo-600 text-indigo-600 shadow-lg shadow-indigo-100 ring-2 ring-indigo-500/20" 
+                                : "bg-white border-slate-100 hover:border-slate-300 hover:bg-slate-50/50 hover:shadow-md",
                               optAr ? "text-right flex-row-reverse" : "text-left"
                             )}
                           >
                             <div className={cn(
-                              "w-12 h-12 rounded-2xl border-2 flex items-center justify-center text-lg transition-all shrink-0",
-                              isSelected ? "bg-indigo-600 border-indigo-600 text-white scale-110 shadow-indigo-200" : "bg-slate-50 border-slate-100 text-slate-400 group-hover:border-slate-300"
+                              "w-12 h-12 rounded-2xl border-2 flex items-center justify-center text-lg transition-all shrink-0 font-display",
+                              isSelected 
+                                ? "bg-indigo-600 border-indigo-600 text-white scale-110 shadow-lg shadow-indigo-200" 
+                                : "bg-slate-50 border-slate-100 text-slate-400 group-hover:border-slate-300 group-hover:bg-indigo-50 group-hover:text-indigo-600"
                             )}>
                               {String.fromCharCode(65 + i)}
                             </div>
-                            <div className="text-lg leading-relaxed" dangerouslySetInnerHTML={{ __html: opt.text }} />
-                            {isSelected && (
-                              <div className={cn("ml-auto", optAr ? "mr-auto ml-0" : "ml-auto")}>
-                                <CheckCircle2 className="w-6 h-6 text-indigo-600" />
-                              </div>
-                            )}
+                            <div className="text-lg leading-relaxed flex-1" dangerouslySetInnerHTML={{ __html: opt.text }} />
+                            <div className={cn(
+                              "flex items-center gap-2",
+                              optAr ? "mr-auto ml-0" : "ml-auto"
+                            )}>
+                              <span className={cn(
+                                "text-[10px] font-black uppercase tracking-widest px-2 py-1 rounded-md transition-opacity duration-300",
+                                isSelected ? "bg-indigo-100 text-indigo-700 opacity-100" : "text-slate-300 opacity-0 group-hover:opacity-100"
+                              )}>
+                                {isSelected ? "Sélectionné" : `Clavier: ${i + 1}`}
+                              </span>
+                              {isSelected && (
+                                <motion.div
+                                  initial={{ scale: 0, rotate: -45 }}
+                                  animate={{ scale: 1, rotate: 0 }}
+                                  className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-white shadow-lg shadow-indigo-200"
+                                >
+                                  <CheckCircle2 className="w-5 h-5" />
+                                </motion.div>
+                              )}
+                            </div>
                           </button>
                         );
                       })}
@@ -725,8 +2154,8 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
                   {currentQuestion.type === 'true-false' && (
                     <div className="flex flex-col sm:flex-row gap-6">
                       {[
-                        { text: 'Vrai', val: 0, color: 'emerald' },
-                        { text: 'Faux', val: 1, color: 'rose' }
+                        { text: 'Vrai', val: 0, color: 'emerald', key: '1' },
+                        { text: 'Faux', val: 1, color: 'rose', key: '2' }
                       ].map((choice) => {
                         const isSelected = answers[currentQuestionIndex] === choice.val;
                         return (
@@ -734,21 +2163,39 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
                             key={choice.val}
                             onClick={() => handleAnswer(choice.val)}
                             className={cn(
-                              "flex-1 p-12 rounded-[2.5rem] border-2 font-black text-2xl transition-all flex flex-col items-center justify-center gap-4",
+                              "flex-1 p-12 rounded-[2.5rem] border-2 font-black text-2xl transition-all flex flex-col items-center justify-center gap-6 relative group overflow-hidden",
                               isSelected 
                                 ? choice.val === 0 
-                                  ? "bg-emerald-50 border-emerald-600 text-emerald-600 shadow-xl shadow-emerald-100" 
-                                  : "bg-rose-50 border-rose-600 text-rose-600 shadow-xl shadow-rose-100"
-                                : "bg-white border-slate-100 hover:border-slate-300 hover:bg-slate-50/50"
+                                  ? "bg-emerald-50 border-emerald-600 text-emerald-600 shadow-xl shadow-emerald-100 ring-4 ring-emerald-500/10" 
+                                  : "bg-rose-50 border-rose-600 text-rose-600 shadow-xl shadow-rose-100 ring-4 ring-rose-500/10"
+                                : "bg-white border-slate-100 hover:border-slate-300 hover:bg-slate-50/50 hover:shadow-md"
                             )}
                           >
                             <div className={cn(
-                              "w-16 h-16 rounded-3xl flex items-center justify-center transition-transform",
-                              isSelected ? "scale-110" : "bg-slate-100 text-slate-400"
+                              "w-20 h-20 rounded-[2rem] flex items-center justify-center transition-all duration-500 border-2",
+                              isSelected 
+                                ? choice.val === 0 ? "bg-emerald-600 border-emerald-500 text-white scale-110 rotate-12 shadow-lg shadow-emerald-200" : "bg-rose-600 border-rose-500 text-white scale-110 -rotate-12 shadow-lg shadow-rose-200"
+                                : "bg-slate-50 border-slate-100 text-slate-300 group-hover:text-slate-400 group-hover:scale-110"
                             )}>
                               {choice.val === 0 ? <CheckCircle2 className="w-10 h-10" /> : <AlertCircle className="w-10 h-10" />}
                             </div>
-                            {choice.text}
+                            <div className="flex flex-col items-center gap-2">
+                              <span>{choice.text}</span>
+                              <span className={cn(
+                                "text-[10px] uppercase tracking-widest font-black transition-opacity duration-300",
+                                isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+                                isSelected ? (choice.val === 0 ? "text-emerald-500" : "text-rose-500") : "text-slate-300"
+                              )}>
+                                Touche: {choice.key}
+                              </span>
+                            </div>
+                            {isSelected && (
+                              <motion.div 
+                                initial={{ opacity: 0, scale: 2 }}
+                                animate={{ opacity: 0.1, scale: 1 }}
+                                className="absolute inset-0 bg-current pointer-events-none"
+                              />
+                            )}
                           </button>
                         );
                       })}
@@ -779,13 +2226,29 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
 
                   {/* Fill-in-the-blanks */}
                   {currentQuestion.type === 'fill-in-the-blanks' && (
-                    <div className="flex flex-col items-center justify-center py-10 space-y-6 text-center">
-                      <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center">
-                        <Info className="w-8 h-8 text-slate-400" />
+                    <div className="flex flex-col items-center justify-center py-12 space-y-8 text-center bg-slate-50/50 rounded-[2rem] border-2 border-dashed border-slate-200">
+                      <div className="flex -space-x-4">
+                        {[1, 2, 3].map((n) => (
+                          <div key={n} className="w-12 h-12 rounded-2xl bg-white border-2 border-slate-100 flex items-center justify-center shadow-sm text-slate-400 font-black text-sm">
+                            {n}
+                          </div>
+                        ))}
                       </div>
-                      <div className="space-y-2">
-                        <h4 className="text-lg font-black text-slate-900 uppercase tracking-tight">Espaces à remplir</h4>
-                        <p className="text-slate-500 text-sm font-medium max-w-sm">Veuillez renseigner tous les champs vides dans le texte ci-dessus.</p>
+                      <div className="space-y-3">
+                        <h4 className="text-xl font-black text-slate-900 uppercase tracking-tight italic font-display">Texte à trous</h4>
+                        <div className="flex flex-col items-center gap-2">
+                           <p className="text-slate-500 text-sm font-medium max-w-sm">Remplissez tous les champs pour compléter le texte.</p>
+                           <div className="flex items-center gap-4 mt-2">
+                             <div className="flex items-center gap-2 px-3 py-1 bg-white border border-slate-200 rounded-lg shadow-sm">
+                               <kbd className="px-1.5 py-0.5 bg-slate-100 border border-slate-300 rounded text-[10px] font-mono">TAB</kbd>
+                               <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Suivant</span>
+                             </div>
+                             <div className="flex items-center gap-2 px-3 py-1 bg-white border border-slate-200 rounded-lg shadow-sm">
+                               <kbd className="px-1.5 py-0.5 bg-slate-100 border border-slate-300 rounded text-[10px] font-mono">ENTRÉE</kbd>
+                               <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Valider champ</span>
+                             </div>
+                           </div>
+                        </div>
                       </div>
                     </div>
                   )}
@@ -977,12 +2440,25 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
                     <span className="text-sm font-black uppercase tracking-tight">Suivant</span>
                     <ChevronRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
                   </button>
+                  {currentQuestionIndex === questions.length - 1 && (
+                    <button 
+                      onClick={() => setShowReview(true)}
+                      className="flex-1 sm:flex-none flex items-center justify-center gap-3 px-8 py-4 rounded-3xl bg-emerald-600 text-white shadow-xl shadow-emerald-100 hover:scale-105 transition-all group"
+                    >
+                      <span className="text-sm font-black uppercase tracking-tight">Réviser</span>
+                      <CheckCircle2 className="w-5 h-5" />
+                    </button>
+                  )}
                 </div>
               </div>
             </motion.div>
+            )}
           </AnimatePresence>
         </div>
       </div>
     </div>
-  );
+  </div>
+</div>
+</div>
+    );
 };

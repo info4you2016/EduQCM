@@ -1,6 +1,19 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { stripHtml } from "./utils";
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+async function fetchFromAI(endpoint: string, body: any): Promise<any> {
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({ error: response.statusText }));
+    throw new Error(errorData.error || "AI Service Error");
+  }
+
+  return response.json();
+}
 
 export interface GeneratedQuestion {
   text: string;
@@ -37,9 +50,7 @@ export const generateQuestions = async (
 
   const selectedTypeNames = allowedTypes.map(t => typeNamesMap[t] || t).join(', ');
 
-  const response = await ai.models.generateContent({
-    model: "gemini-3-flash-preview",
-    contents: `Tu es un expert pédagogique. Génère ${count} questions d'examen pour un niveau technique/professionnel sur le sujet suivant : "${topic}". 
+  const prompt = `Tu es un expert pédagogique. Génère ${count} questions d'examen pour un niveau technique/professionnel sur le sujet suivant : "${topic}". 
     
     ${pointsInstruction}
 
@@ -55,67 +66,70 @@ export const generateQuestions = async (
        - 'matchOptions' : les éléments de la colonne de DROITE sous forme de chaines de caractères (ex: ["Paris", "Rabat"]).
        - 'correctMatches' : les index de 'matchOptions' reliant la gauche à la droite (ex: [0, 1] car France correspond à matchOptions[0] (Paris)).
        - 'columnAHeader' et 'columnBHeader' : titres pertinents pour chaque colonne (ex: "Pays" et "Capitales").
-    8. La langue de sortie doit être le Français.
+    8. Ne fournis JAMAIS d'indices (hints), de remarques ou de pistes de réponse dans l'énoncé de la question.
+    9. La langue de sortie doit être le Français.
     
-    Répond uniquement au format JSON valide.`,
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.ARRAY,
-        items: {
-          type: Type.OBJECT,
-          properties: {
-            text: { type: Type.STRING, description: "L'énoncé de la question" },
-            type: { 
-              type: Type.STRING, 
-              enum: allowedTypes,
-              description: "Le type de question"
-            },
-            options: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  text: { type: Type.STRING },
-                  isCorrect: { type: Type.BOOLEAN }
-                },
-                required: ['text']
-              },
-              description: "Options pour QCM, Vrai/Faux, Ordering (texte), Matching (gauche)"
-            },
-            matchOptions: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-              description: "OBLIGATOIRE pour Matching : Les éléments de la colonne de DROITE."
-            },
-            correctAnswer: { type: Type.STRING, description: "Corrigé type pour les questions à réponse courte" },
-            correctAnswers: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-              description: "Mots manquants pour Texte à trous"
-            },
-            correctOrder: {
-              type: Type.ARRAY,
-              items: { type: Type.NUMBER },
-              description: "Ordre correct des index pour Ordonnancement"
-            },
-            correctMatches: {
-              type: Type.ARRAY,
-              items: { type: Type.NUMBER },
-              description: "OBLIGATOIRE pour Matching : Index des matchOptions correspondant à chaque option de gauche."
-            },
-            columnAHeader: { type: Type.STRING, description: "Pour Matching : Titre de la colonne de gauche" },
-            columnBHeader: { type: Type.STRING, description: "Pour Matching : Titre de la colonne de droite" },
-            points: { type: Type.NUMBER, description: "Nombre de points (ex: 2)" }
+    Répond uniquement au format JSON valide.`;
+
+  const config = {
+    responseMimeType: "application/json",
+    responseSchema: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: {
+          text: { type: "STRING", description: "L'énoncé de la question" },
+          type: { 
+            type: "STRING", 
+            enum: allowedTypes,
+            description: "Le type de question"
           },
-          required: ['text', 'type', 'points']
-        }
+          options: {
+            type: "ARRAY",
+            items: {
+              type: "OBJECT",
+              properties: {
+                text: { type: "STRING" },
+                isCorrect: { type: "BOOLEAN" }
+              },
+              required: ['text']
+            },
+            description: "Options pour QCM, Vrai/Faux, Ordering (texte), Matching (gauche)"
+          },
+          matchOptions: {
+            type: "ARRAY",
+            items: { type: "STRING" },
+            description: "OBLIGATOIRE pour Matching : Les éléments de la colonne de DROITE."
+          },
+          correctAnswer: { type: "STRING", description: "Corrigé type pour les questions à réponse courte" },
+          correctAnswers: {
+            type: "ARRAY",
+            items: { type: "STRING" },
+            description: "Mots manquants pour Texte à trous"
+          },
+          correctOrder: {
+            type: "ARRAY",
+            items: { type: "NUMBER" },
+            description: "Ordre correct des index pour Ordonnancement"
+          },
+          correctMatches: {
+            type: "ARRAY",
+            items: { type: "NUMBER" },
+            description: "OBLIGATOIRE pour Matching : Index des matchOptions correspondant à chaque option de gauche."
+          },
+          columnAHeader: { type: "STRING", description: "Pour Matching : Titre de la colonne de gauche" },
+          columnBHeader: { type: "STRING", description: "Pour Matching : Titre de la colonne de droite" },
+          points: { type: "NUMBER", description: "Nombre de points (ex: 2)" }
+        },
+        required: ['text', 'type', 'points']
       }
     }
-  });
+  };
+
+  const result = await fetchFromAI("/api/ai/generate-questions", { prompt, config });
 
   try {
-    return JSON.parse(response.text);
+    return JSON.parse(result.text);
   } catch (error) {
     console.error("Error parsing AI response:", error);
     throw new Error("L'IA n'a pas pu générer les questions correctement.");
@@ -125,18 +139,138 @@ export const generateQuestions = async (
 export const evaluateShortAnswer = async (question: string, expectedAnswer: string, studentAnswer: string): Promise<number> => {
   if (!studentAnswer.trim()) return 0;
   
-  const response = await ai.models.generateContent({
-    model: "gemini-3-flash-preview",
-    contents: `Évalue la réponse de l'étudiant par rapport à la réponse attendue pour la question donnée.
-    Question : "${question}"
-    Réponse attendue : "${expectedAnswer}"
-    Réponse de l'étudiant : "${studentAnswer}"
-    
-    Donne un score entre 0 et 1 (0 = faux, 1 = parfait, entre les deux pour une réponse partiellement correcte).
-    Sois indulgent sur l'orthographe si le sens est correct.
-    Répond uniquement avec le nombre (ex: 0.5 ou 1).`,
-  });
+  const result = await fetchFromAI("/api/ai/evaluate-short-answer", { question, expectedAnswer, studentAnswer });
 
-  const score = parseFloat(response.text.trim());
+  const score = parseFloat(result.text.trim());
   return isNaN(score) ? 0 : Math.max(0, Math.min(1, score));
+};
+
+export const analyzeExamResults = async (
+  examTitle: string,
+  totalScore: number,
+  totalPoints: number,
+  questionResults: any[],
+  questions: any[]
+): Promise<string> => {
+  const resultsSummary = questionResults.map((res, i) => {
+    const q = questions[i];
+    return `- Question: "${stripHtml(q.text)}" | Résultat: ${res.pointsEarned}/${q.points || 1} | Type: ${q.type}`;
+  }).join('\n');
+
+  const result = await fetchFromAI("/api/ai/analyze-results", { examTitle, totalScore, totalPoints, resultsSummary });
+
+  return result.text.trim();
+};
+
+export const generateQuestionVariation = async (
+  originalQuestion: any,
+  instruction: string = "Propose une variation de cette question (même sujet, mais formulation ou valeurs différentes)"
+): Promise<GeneratedQuestion> => {
+  const prompt = `Tu es un expert pédagogique. Voici une question d'examen originale :
+    ${JSON.stringify(originalQuestion)}
+    
+    Instruction de l'utilisateur : "${instruction}"
+    
+    Génère une NOUVELLE question basée sur l'originale en suivant l'instruction. Garde le même type de question (${originalQuestion.type}) et le même nombre de points (${originalQuestion.points}).
+    
+    Répond uniquement au format JSON valide.`;
+
+  const config = {
+    responseMimeType: "application/json",
+    responseSchema: {
+      type: "OBJECT",
+      properties: {
+        text: { type: "STRING" },
+        type: { type: "STRING" },
+        options: {
+          type: "ARRAY",
+          items: {
+            type: "OBJECT",
+            properties: {
+              text: { type: "STRING" },
+              isCorrect: { type: "BOOLEAN" }
+            },
+            required: ['text']
+          }
+        },
+        correctAnswer: { type: "STRING" },
+        correctAnswers: { type: "ARRAY", items: { type: "STRING" } },
+        matchOptions: { type: "ARRAY", items: { type: "STRING" } },
+        correctMatches: { type: "ARRAY", items: { type: "NUMBER" } },
+        correctOrder: { type: "ARRAY", items: { type: "NUMBER" } },
+        points: { type: "NUMBER" }
+      },
+      required: ['text', 'type', 'points']
+    }
+  };
+
+  const result = await fetchFromAI("/api/ai/generic", { prompt, config });
+  return JSON.parse(result.text);
+};
+
+export const generateDistractors = async (question: string, correctAnswer: string): Promise<string[]> => {
+  const prompt = `Génère 3 fausses options (distracteurs) plausibles pour la question suivante :
+    Question : "${stripHtml(question)}"
+    Réponse correcte : "${stripHtml(correctAnswer)}"
+    
+    Répond uniquement avec un tableau JSON de 3 chaînes de caractères.`;
+
+  const config = {
+    responseMimeType: "application/json",
+    responseSchema: {
+      type: "ARRAY",
+      items: { type: "STRING" }
+    }
+  };
+
+  const result = await fetchFromAI("/api/ai/generic", { prompt, config });
+
+  try {
+    return JSON.parse(result.text);
+  } catch (error) {
+    console.error("Error parsing distractors:", error);
+    return [];
+  }
+};
+
+export const generateMatchingPairs = async (topic: string, count: number = 4): Promise<{ a: string, b: string }[]> => {
+  const prompt = `Génère ${count} paires d'associations logiques sur le sujet suivant : "${stripHtml(topic)}".
+    Chaque paire doit être composée d'un élément court (A) et d'un élément correspondant (B).
+    
+    Répond uniquement avec un tableau JSON d'objets : [{ "a": "...", "b": "..." }]`;
+
+  const config = {
+    responseMimeType: "application/json",
+    responseSchema: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: {
+          a: { type: "STRING" },
+          b: { type: "STRING" }
+        },
+        required: ["a", "b"]
+      }
+    }
+  };
+
+  const result = await fetchFromAI("/api/ai/generic", { prompt, config });
+
+  try {
+    return JSON.parse(result.text);
+  } catch (error) {
+    console.error("Error parsing matching pairs:", error);
+    return [];
+  }
+};
+
+export const refineQuestion = async (question: any): Promise<any> => {
+  const result = await fetchFromAI("/api/ai/refine-question", { question });
+
+  try {
+    return JSON.parse(result.text);
+  } catch (error) {
+    console.error("Error refining question:", error);
+    return question;
+  }
 };

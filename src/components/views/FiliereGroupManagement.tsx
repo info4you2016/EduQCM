@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Plus, Edit2, Trash2, Users, User } from 'lucide-react';
+import { Plus, Edit2, Trash2, Users, User, FileUp } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { api } from '../../lib/api';
 import { cn } from '../../lib/utils';
@@ -9,50 +9,85 @@ import { Card } from '../ui/Card';
 import { Input } from '../ui/Input';
 import { Modal } from '../ui/Modal';
 import { EmptyState } from '../ui/EmptyState';
+import { BulkImportStudents } from '../sections/BulkImportStudents';
 
 export const StudentListModal = React.memo(({ group, onClose }: { group: Group; onClose: () => void }) => {
   const [students, setStudents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showImport, setShowImport] = useState(false);
+
+  const fetchStudents = async () => {
+    try {
+      setLoading(true);
+      const data = await api.groups.getStudents(group.id);
+      setStudents(data);
+    } catch (err: any) {
+      console.error("Error fetching students:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchStudents = async () => {
-      try {
-        const data = await api.groups.getStudents(group.id);
-        setStudents(data);
-      } catch (err: any) {
-        console.error("Error fetching students:", err);
-      } finally {
-        setLoading(false);
-      }
-    };
     fetchStudents();
   }, [group.id]);
 
   return (
-    <Modal title={`Étudiants - ${group.name}`} onClose={onClose} maxWidth="max-w-2xl">
-      <div className="space-y-4 p-5 sm:p-8">
-        {loading ? (
-          <div className="flex justify-center py-8">
-            <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-indigo-600"></div>
-          </div>
-        ) : students.length === 0 ? (
-          <EmptyState message="Aucun étudiant dans ce groupe." />
+    <Modal title={`Gestion du Groupe - ${group.name}`} onClose={onClose} maxWidth="max-w-2xl">
+      <div className="space-y-6 p-5 sm:p-8">
+        <div className="flex items-center justify-between">
+           <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Liste des Étudiants</h3>
+           <div className="flex gap-2">
+             <Button 
+               variant={showImport ? "primary" : "outline"} 
+               size="sm" 
+               onClick={() => setShowImport(!showImport)}
+               className="text-[10px] font-black uppercase tracking-widest gap-2"
+             >
+               <FileUp className="w-3.5 h-3.5" />
+               {showImport ? "Voir la Liste" : "Import CSV"}
+             </Button>
+           </div>
+        </div>
+
+        {showImport ? (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+          >
+            <BulkImportStudents 
+              filiereId={group.filiereId} 
+              groupId={group.id} 
+              groupName={group.name} 
+              onSuccess={fetchStudents} 
+            />
+          </motion.div>
         ) : (
-          <div className="grid grid-cols-1 gap-3">
-            {students.map(student => (
-              <Card key={student.id} className="p-4 flex items-center gap-4 border-none shadow-md shadow-slate-100 bg-slate-50/50">
-                <div className="w-10 h-10 rounded-full bg-white flex items-center justify-center border border-slate-100">
-                  <User className="w-5 h-5 text-indigo-600" />
-                </div>
-                <div className="flex-1">
-                  <h4 className="font-bold text-slate-900">{student.displayName}</h4>
-                  <p className="text-xs text-slate-500">{student.email}</p>
-                </div>
-                <div className="text-[10px] font-black text-slate-300 uppercase tracking-widest bg-white px-2 py-0.5 rounded-lg border border-slate-100">
-                  Inscrit le {new Date(student.createdAt).toLocaleDateString()}
-                </div>
-              </Card>
-            ))}
+          <div className="space-y-4">
+            {loading ? (
+              <div className="flex justify-center py-8">
+                <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-indigo-600"></div>
+              </div>
+            ) : students.length === 0 ? (
+              <EmptyState message="Aucun étudiant dans ce groupe." />
+            ) : (
+              <div className="grid grid-cols-1 gap-3 max-h-[400px] overflow-y-auto custom-scrollbar pr-2 font-sans font-medium tracking-tight text-gray-900">
+                {students.map(student => (
+                  <Card key={student.id} className="p-4 flex items-center gap-4 border-none shadow-md shadow-slate-100 bg-slate-50/50">
+                    <div className="w-10 h-10 rounded-full bg-white flex items-center justify-center border border-slate-100">
+                      <User className="w-5 h-5 text-indigo-600" />
+                    </div>
+                    <div className="flex-1">
+                      <h4 className="font-bold text-slate-900">{student.displayName}</h4>
+                      <p className="text-xs text-slate-500">{student.email}</p>
+                    </div>
+                    <div className="text-[10px] font-black text-slate-300 uppercase tracking-widest bg-white px-2 py-0.5 rounded-lg border border-slate-100">
+                      Inscrit le {new Date(student.createdAt).toLocaleDateString()}
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>
