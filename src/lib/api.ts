@@ -4,6 +4,11 @@ const API_URL = "/api";
 
 export const socket = io();
 
+export let onDualSessionDetected: (() => void) | null = null;
+export function setOnDualSessionDetected(cb: () => void) {
+  onDualSessionDetected = cb;
+}
+
 async function request(path: string, options: RequestInit = {}) {
   const res = await fetch(`${API_URL}${path}`, {
     ...options,
@@ -25,6 +30,13 @@ async function request(path: string, options: RequestInit = {}) {
     } else {
       errorMessage = await res.text();
     }
+    
+    if (errorMessage === "DUAL_SESSION") {
+      if (onDualSessionDetected) {
+        onDualSessionDetected();
+      }
+    }
+    
     throw new Error(errorMessage);
   }
   
@@ -70,15 +82,27 @@ export const api = {
     delete: (id: number) => request(`/notifications/${id}`, { method: "DELETE" }),
     markRead: (id: number) => request(`/notifications/${id}/read`, { method: "POST" }),
     markAllRead: () => request("/notifications/read-all", { method: "POST" }),
+    togglePin: (id: number) => request(`/notifications/${id}/toggle-pin`, { method: "POST" }),
+    react: (id: number, reactionType: string) => request(`/notifications/${id}/react`, { method: "POST", body: JSON.stringify({ reactionType }) }),
+    addComment: (id: number, content: string) => request(`/notifications/${id}/comments`, { method: "POST", body: JSON.stringify({ content }) }),
+    deleteComment: (commentId: number) => request(`/notifications/comments/${commentId}`, { method: "DELETE" }),
   },
   admin: {
+    getDiagnostic: () => request("/admin/db-diagnostic"),
+    runVacuum: () => request("/admin/db-vacuum", { method: "POST" }),
     backup: () => "/api/admin/backup", // This returns the URL for download
+    backupZip: () => "/api/admin/backup?format=zip", // Zipped download
     getStudentCount: () => request("/students/count"),
     listUsers: () => request("/admin/users"),
     createUser: (data: any) => request("/admin/users", { method: "POST", body: JSON.stringify(data) }),
     deleteUser: (id: number) => request(`/admin/users/${id}`, { method: "DELETE" }),
     updateUser: (id: number, data: any) => request(`/admin/users/${id}`, { method: "PUT", body: JSON.stringify(data) }),
     getLogs: () => request("/admin/logs"),
+    getOnlineUsers: () => request("/admin/online-users"),
+    getAutoBackups: () => request("/admin/auto-backups"),
+    deleteAutoBackup: (filename: string) => request(`/admin/auto-backups/${filename}`, { method: "DELETE" }),
+    triggerAutoBackup: () => request("/admin/auto-backups/trigger", { method: "POST" }),
+    restoreAutoBackup: (filename: string) => request(`/admin/auto-backups/${filename}/restore`, { method: "POST" }),
     restore: async (file: File) => {
       const formData = new FormData();
       formData.append("file", file);
@@ -121,5 +145,13 @@ export const api = {
   settings: {
     get: () => request("/settings"),
     update: (data: any) => request("/settings", { method: "PUT", body: JSON.stringify(data) }),
+  },
+  chat: {
+    getMessages: (channelType: string, groupId?: number) => {
+      const q = new URLSearchParams();
+      q.append("channelType", channelType);
+      if (groupId) q.append("groupId", groupId.toString());
+      return request(`/chat/messages?${q.toString()}`);
+    }
   },
 };

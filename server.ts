@@ -13,8 +13,46 @@ import fs from "fs";
 import { GoogleGenAI } from "@google/genai";
 
 import cors from "cors";
+import https from "https";
+import AdmZip from "adm-zip";
 
 const JWT_SECRET = process.env.JWT_SECRET || "eduqcm-secret-key";
+
+// --- Local Assets Caching for Offline LAN setups ---
+const OFPPT_LOGO_PATH = path.join("uploads", "ofppt-logo.png");
+const AMIRI_FONT_PATH = path.join("uploads", "Amiri-Regular.ttf");
+
+function cacheLocalAsset(url: string, dest: string, name: string) {
+  if (fs.existsSync(dest)) {
+    return;
+  }
+  
+  const file = fs.createWriteStream(dest);
+  const request = https.get(url, (response) => {
+    if (response.statusCode === 200) {
+      response.pipe(file);
+      file.on("finish", () => {
+        file.close();
+        console.log(`[Offline Mode] Successfully cached ${name} locally for intranet operations.`);
+      });
+    } else {
+      file.close();
+      fs.unlink(dest, () => {});
+    }
+  });
+
+  request.on("error", (err) => {
+    file.close();
+    fs.unlink(dest, () => {});
+    console.warn(`[Offline Mode] Failed to cache ${name} due to connection error (expected offline environment fallback):`, err.message);
+  });
+}
+
+// Lazy asynchronous pre-caching after server start
+setTimeout(() => {
+  cacheLocalAsset("https://upload.wikimedia.org/wikipedia/commons/thumb/e/e0/OFPPT_Logo.svg/1200px-OFPPT_Logo.svg.png", OFPPT_LOGO_PATH, "OFPPT logo");
+  cacheLocalAsset("https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/amiri/Amiri-Regular.ttf", AMIRI_FONT_PATH, "Amiri regular font");
+}, 2500);
 
 // --- AI Setup (Lazy) ---
 let aiInstance: GoogleGenAI | null = null;
@@ -30,6 +68,45 @@ function getAI() {
     });
   }
   return aiInstance;
+}
+
+// --- Local Offline AI handler (Ollama/LM Studio etc.) ---
+async function generateWithOllama(ollamaUrl: string, model: string, prompt: string, configSchema: any) {
+  const cleanUrl = ollamaUrl.endsWith('/') ? ollamaUrl.slice(0, -1) : ollamaUrl;
+  const endpoint = `${cleanUrl}/api/chat`;
+  
+  const payload = {
+    model: model,
+    messages: [
+      {
+        role: "system",
+        content: "Tu es un expert pédagogique. Réponds exclusivement avec un tableau d'objets ou un objet JSON valide représentant des questions d'examen ou résultats pédagogiques conformes au schéma demandé."
+      },
+      {
+        role: "user",
+        content: prompt
+      }
+    ],
+    format: "json",
+    stream: false,
+    options: {
+      temperature: 0.7
+    }
+  };
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    throw new Error(`Ollama local a retourné le code : ${response.status}`);
+  }
+
+  const result = await response.json() as any;
+  const content = result.message?.content || result.response || "";
+  return content;
 }
 
 // --- Database Setup ---
@@ -71,6 +148,7 @@ const upload = multer({ dest: "uploads/" });
       groupId INTEGER,
       filiereId INTEGER,
       registrationNumber TEXT,
+      activeSessionId TEXT,
       createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(filiereId) REFERENCES filieres(id),
       FOREIGN KEY(groupId) REFERENCES groups(id)
@@ -179,6 +257,32 @@ const upload = multer({ dest: "uploads/" });
       details TEXT,
       createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(userId) REFERENCES users(id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS chat_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      senderId INTEGER NOT NULL,
+      senderName TEXT NOT NULL,
+      senderRole TEXT NOT NULL,
+      content TEXT NOT NULL,
+      channelType TEXT NOT NULL,
+      groupId INTEGER,
+      isEdited INTEGER DEFAULT 0,
+      isPinned INTEGER DEFAULT 0,
+      attachmentUrl TEXT,
+      attachmentName TEXT,
+      attachmentType TEXT,
+      createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(senderId) REFERENCES users(id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS chat_reactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      messageId INTEGER NOT NULL,
+      userId INTEGER NOT NULL,
+      userName TEXT NOT NULL,
+      emoji TEXT NOT NULL,
+      createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(messageId) REFERENCES chat_messages(id) ON DELETE CASCADE,
+      UNIQUE(messageId, userId, emoji)
     )`
   ];
 
@@ -213,6 +317,11 @@ const upload = multer({ dest: "uploads/" });
   try { db.exec("ALTER TABLE notifications ADD COLUMN type TEXT DEFAULT 'announcement'"); } catch (e) {}
   try { db.exec("ALTER TABLE filieres ADD COLUMN niveau TEXT"); } catch (e) {}
   try { db.exec("ALTER TABLE results ADD COLUMN aiFeedback TEXT"); } catch (e) {}
+  try { db.exec("ALTER TABLE results ADD COLUMN integrityScore INTEGER DEFAULT 100"); } catch (e) {}
+  try { db.exec("ALTER TABLE results ADD COLUMN tabExitCount INTEGER DEFAULT 0"); } catch (e) {}
+  try { db.exec("ALTER TABLE results ADD COLUMN fullscreenExitsCount INTEGER DEFAULT 0"); } catch (e) {}
+  try { db.exec("ALTER TABLE results ADD COLUMN auditTrail TEXT"); } catch (e) {}
+  try { db.exec("ALTER TABLE users ADD COLUMN activeSessionId TEXT"); } catch (e) {}
   try { db.exec("ALTER TABLE settings ADD COLUMN orgLogoUrl TEXT"); } catch (e) {}
   try { db.exec("ALTER TABLE settings ADD COLUMN orgNameArabic TEXT DEFAULT 'مكتب التكوين المهني وإنعاش الشغل'"); } catch (e) {}
   try { db.exec("ALTER TABLE settings ADD COLUMN orgNameFrench TEXT DEFAULT 'Office de la Formation Professionnelle et de la promotion du travail'"); } catch (e) {}
@@ -233,6 +342,67 @@ const upload = multer({ dest: "uploads/" });
   try { db.exec("ALTER TABLE settings ADD COLUMN showWatermark INTEGER DEFAULT 0"); } catch (e) {}
   try { db.exec("ALTER TABLE settings ADD COLUMN watermarkColor TEXT DEFAULT '#E0E0E0'"); } catch (e) {}
   try { db.exec("ALTER TABLE settings ADD COLUMN watermarkOpacity INTEGER DEFAULT 3"); } catch (e) {}
+  try { db.exec("ALTER TABLE settings ADD COLUMN localAiEnabled INTEGER DEFAULT 0"); } catch (e) {}
+  try { db.exec("ALTER TABLE settings ADD COLUMN localAiUrl TEXT DEFAULT 'http://localhost:11434'"); } catch (e) {}
+  try { db.exec("ALTER TABLE settings ADD COLUMN localAiModel TEXT DEFAULT 'llama3'"); } catch (e) {}
+
+  // Migrations for Premium Chat Features
+  try { db.exec("ALTER TABLE chat_messages ADD COLUMN isEdited INTEGER DEFAULT 0"); } catch (e) {}
+  try { db.exec("ALTER TABLE chat_messages ADD COLUMN isPinned INTEGER DEFAULT 0"); } catch (e) {}
+  try { db.exec("ALTER TABLE chat_messages ADD COLUMN attachmentUrl TEXT"); } catch (e) {}
+  try { db.exec("ALTER TABLE chat_messages ADD COLUMN attachmentName TEXT"); } catch (e) {}
+  try { db.exec("ALTER TABLE chat_messages ADD COLUMN attachmentType TEXT"); } catch (e) {}
+  
+  // Migrations for Scheduled Automatic Backups
+  try { db.exec("ALTER TABLE settings ADD COLUMN autoBackupEnabled INTEGER DEFAULT 0"); } catch (e) {}
+  try { db.exec("ALTER TABLE settings ADD COLUMN autoBackupInterval TEXT DEFAULT 'daily'"); } catch (e) {}
+  try { db.exec("ALTER TABLE settings ADD COLUMN autoBackupCount INTEGER DEFAULT 5"); } catch (e) {}
+  try { db.exec("ALTER TABLE settings ADD COLUMN autoBackupTime TEXT DEFAULT '02:00'"); } catch (e) {}
+  try { db.exec("ALTER TABLE settings ADD COLUMN autoBackupLastRun TEXT"); } catch (e) {}
+
+  // Migrations for interactive and enriched announcements
+  try { db.exec("ALTER TABLE notifications ADD COLUMN isPinned INTEGER DEFAULT 0"); } catch (e) {}
+  try { db.exec("ALTER TABLE notifications ADD COLUMN importance TEXT DEFAULT 'normal'"); } catch (e) {}
+  try { db.exec("ALTER TABLE notifications ADD COLUMN attachmentUrl TEXT"); } catch (e) {}
+  try { db.exec("ALTER TABLE notifications ADD COLUMN attachmentName TEXT"); } catch (e) {}
+  try { db.exec("ALTER TABLE notifications ADD COLUMN filiereId INTEGER"); } catch (e) {}
+  try { db.exec("ALTER TABLE notifications ADD COLUMN audienceRole TEXT DEFAULT 'all'"); } catch (e) {}
+
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS notification_reactions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        notificationId INTEGER NOT NULL,
+        userId INTEGER NOT NULL,
+        reactionType TEXT NOT NULL,
+        userDisplayName TEXT NOT NULL,
+        createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(notificationId, userId, reactionType),
+        FOREIGN KEY(notificationId) REFERENCES notifications(id) ON DELETE CASCADE,
+        FOREIGN KEY(userId) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+  } catch (e) {
+    console.error("Notification reactions table failed:", e);
+  }
+
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS notification_comments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        notificationId INTEGER NOT NULL,
+        userId INTEGER NOT NULL,
+        userDisplayName TEXT NOT NULL,
+        userRole TEXT NOT NULL,
+        content TEXT NOT NULL,
+        createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(notificationId) REFERENCES notifications(id) ON DELETE CASCADE,
+        FOREIGN KEY(userId) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+  } catch (e) {
+    console.error("Notification comments table failed:", e);
+  }
 
   try {
     db.exec(`
@@ -389,6 +559,108 @@ async function startServer() {
 
   const ai = getAI();
 
+  // --- Online Users tracking ---
+  const onlineUsers = new Map<number, {
+    id: number;
+    displayName: string;
+    email: string;
+    role: string;
+    lastActive: number;
+  }>();
+
+  const updateOnlineUser = (user: any) => {
+    if (user && user.id) {
+      onlineUsers.set(user.id, {
+        id: user.id,
+        displayName: user.displayName || "Utilisateur sans nom",
+        email: user.email || '',
+        role: user.role || 'student',
+        lastActive: Date.now()
+      });
+    }
+  };
+
+  const createLog = (userId: number, action: string, details: string) => {
+    try {
+      db.prepare("INSERT INTO audit_logs (userId, action, details) VALUES (?, ?, ?)").run(userId, action, details);
+    } catch (e) {
+      console.error("Failed to create audit log:", e);
+    }
+  };
+
+  const auditLogger = (req: any, res: any, next: any) => {
+    res.on('finish', () => {
+      if (req.user && res.statusCode < 400) {
+        let action = '';
+        let details = '';
+        const method = req.method;
+        const url = req.originalUrl || req.url;
+
+        // Skip logging audit endpoints to minimize clutter
+        if (
+          url.includes('/api/admin/logs') || 
+          url.includes('/api/admin/online-users') || 
+          url.includes('/api/admin/log-client-action')
+        ) {
+          return;
+        }
+
+        if (method === 'POST' || method === 'PUT' || method === 'DELETE') {
+          if (url.includes('/api/auth/login')) {
+            action = 'CONNEXION';
+            details = `Connexion réussie de l'utilisateur ${req.user.displayName}.`;
+          } else if (url.includes('/api/auth/signup')) {
+            action = 'INSCRIPTION';
+            details = `Création de compte initial : ${req.body?.email || ''}`;
+          } else if (url.includes('/api/auth/logout')) {
+            action = 'DECONNEXION';
+            details = 'Déconnexion.';
+          } else if (url.includes('/api/exams') && method === 'POST') {
+            action = 'CREATION_EXAMEN';
+            details = `Création de l'évaluation "${req.body?.title || 'Sans titre'}".`;
+          } else if (url.includes('/publish') && method === 'POST') {
+            action = 'PUBLICATION_EXAMEN';
+            details = `Mise en ligne de l'évaluation pour les étudiants.`;
+          } else if (url.includes('/unpublish') && method === 'POST') {
+            action = 'DEPUBLICATION_EXAMEN';
+            details = `Désactivation de l'accès public à l'évaluation.`;
+          } else if (url.includes('/api/results') && method === 'POST') {
+            action = 'SOUMISSION_EXAMEN';
+            details = `L'étudiant a finalisé et soumis sa copie d'évaluation.`;
+          } else if (url.includes('/api/modules') && method === 'POST') {
+            action = 'CREATION_MODULE';
+            details = `Création d'un module d'apprentissage : ${req.body?.name || ''}`;
+          } else if (url.includes('/api/admin/bulk-import-students')) {
+            action = 'IMPORT_ETUDIANTS';
+            details = `Importation en masse de profils d'étudiants.`;
+          } else if (url.includes('/api/admin/db-vacuum')) {
+            action = 'OPTIMISATIONS_BD';
+            details = `Compactage de la base de données (VACUUM).`;
+          } else if (url.includes('/api/admin/users') && method === 'POST') {
+            action = 'CREATION_UTILISATEUR';
+            details = `Ajout d'un nouvel utilisateur : ${req.body?.email || ''}`;
+          } else if (url.includes('/api/admin/users') && method === 'DELETE') {
+            action = 'SUPPRESSION_UTILISATEUR';
+            details = `Suppression d'un compte utilisateur.`;
+          } else if (url.includes('/api/settings') && method === 'PUT') {
+            action = 'EDITION_PARAMETRES';
+            details = `Changement de la configuration globale de l'école.`;
+          } else {
+            action = `${method}_SYSTEME`;
+            details = `Action effectuée sur l'URL : ${url}`;
+          }
+
+          if (action) {
+            createLog(req.user.id, action, details);
+          }
+        }
+      }
+    });
+    next();
+  };
+
+  app.use(auditLogger);
+
   // --- Auth Middleware ---
   const authenticate = (req: any, res: any, next: any) => {
     const token = req.cookies.token;
@@ -406,8 +678,14 @@ async function startServer() {
       `).get(decoded.id) as any;
       
       if (!user) {
-        res.clearCookie("token");
+        res.clearCookie("token", { httpOnly: true, secure: true, sameSite: 'none' });
         return res.status(401).json({ error: "User no longer exists" });
+      }
+
+      // Check for dual concurrent session for students
+      if (user.role === 'student' && user.activeSessionId && decoded.sessionId !== user.activeSessionId) {
+        res.clearCookie("token", { httpOnly: true, secure: true, sameSite: 'none' });
+        return res.status(401).json({ error: "DUAL_SESSION" });
       }
       
       const { password: _, groupNameResolved, filiereNameResolved, ...userWithoutPassword } = user;
@@ -415,8 +693,13 @@ async function startServer() {
         ...userWithoutPassword, 
         id: Number(userWithoutPassword.id),
         groupName: groupNameResolved || userWithoutPassword.groupName,
-        filiere: filiereNameResolved || userWithoutPassword.filiere
+        filiere: filiereNameResolved || userWithoutPassword.filiere,
+        activeSessionId: user.activeSessionId
       };
+      
+      // Track that this user is online and active
+      updateOnlineUser(req.user);
+
       next();
     } catch (err) {
       res.status(401).json({ error: "Invalid token" });
@@ -437,18 +720,214 @@ async function startServer() {
         }
       }
       
+      // Join general room for public announcements & general chat
+      socket.join('general');
+
       // Join group room if student
       if (userData.role === 'student' && userData.groupId) {
         socket.join(`group-${userData.groupId}`);
       }
       
-      // Join teachers room if teacher
-      if (userData.role === 'teacher') {
+      // Join teachers room if teacher or admin
+      if (userData.role === 'teacher' || userData.role === 'admin') {
         socket.join('teachers');
       }
       
       // Join individual user room for private notifs if needed
       socket.join(`user-${userData.id}`);
+    });
+
+    // --- REALTIME CHAT SYSTEM HANDLERS ---
+    socket.on("chat:message:send", (msgData: { 
+      channelType: string; 
+      groupId?: number; 
+      content: string; 
+      senderId: number; 
+      senderName: string; 
+      senderRole: string;
+      attachmentUrl?: string;
+      attachmentName?: string;
+      attachmentType?: string;
+    }) => {
+      if (!msgData || (!msgData.content && !msgData.attachmentUrl) || !msgData.senderId) return;
+
+      try {
+        const stmt = db.prepare(`
+          INSERT INTO chat_messages (senderId, senderName, senderRole, content, channelType, groupId, attachmentUrl, attachmentName, attachmentType)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        const result = stmt.run(
+          msgData.senderId,
+          msgData.senderName,
+          msgData.senderRole,
+          msgData.content || "",
+          msgData.channelType,
+          msgData.groupId || null,
+          msgData.attachmentUrl || null,
+          msgData.attachmentName || null,
+          msgData.attachmentType || null
+        );
+
+        const createdMessage = {
+          id: result.lastInsertRowid,
+          senderId: msgData.senderId,
+          senderName: msgData.senderName,
+          senderRole: msgData.senderRole,
+          content: msgData.content || "",
+          channelType: msgData.channelType,
+          groupId: msgData.groupId || null,
+          isEdited: 0,
+          isPinned: 0,
+          attachmentUrl: msgData.attachmentUrl || null,
+          attachmentName: msgData.attachmentName || null,
+          attachmentType: msgData.attachmentType || null,
+          createdAt: new Date().toISOString(),
+          reactions: []
+        };
+
+        // Determine target room
+        let targetRoom = 'general';
+        if (msgData.channelType === 'teachers') {
+          targetRoom = 'teachers';
+        } else if (msgData.channelType === 'group' && msgData.groupId) {
+          targetRoom = `group-${msgData.groupId}`;
+        }
+
+        // Broadcast to clients subscribed to target room
+        io.to(targetRoom).emit("chat:message:received", createdMessage);
+      } catch (e) {
+        console.error("Failed to write & broadcast real-time chat message:", e);
+      }
+    });
+
+    socket.on("chat:message:edit", (data: { id: number; content: string; channelType: string; groupId?: number; userId: number }) => {
+      if (!data || !data.id || !data.content) return;
+      try {
+        const currentMsg = db.prepare("SELECT senderId FROM chat_messages WHERE id = ?").get(data.id) as any;
+        if (!currentMsg || currentMsg.senderId !== data.userId) return;
+
+        db.prepare("UPDATE chat_messages SET content = ?, isEdited = 1 WHERE id = ?").run(data.content, data.id);
+
+        let targetRoom = 'general';
+        if (data.channelType === 'teachers') {
+          targetRoom = 'teachers';
+        } else if (data.channelType === 'group' && data.groupId) {
+          targetRoom = `group-${data.groupId}`;
+        }
+
+        io.to(targetRoom).emit("chat:message:edited", {
+          id: data.id,
+          content: data.content,
+          isEdited: 1
+        });
+      } catch (err) {
+        console.error("Failed to edit chat message:", err);
+      }
+    });
+
+    socket.on("chat:message:delete", (data: { id: number; channelType: string; groupId?: number; userId: number; userRole: string }) => {
+      if (!data || !data.id) return;
+      try {
+        const currentMsg = db.prepare("SELECT senderId FROM chat_messages WHERE id = ?").get(data.id) as any;
+        if (!currentMsg) return;
+
+        const canDelete = currentMsg.senderId === data.userId || data.userRole === 'teacher' || data.userRole === 'admin';
+        if (!canDelete) return;
+
+        db.prepare("DELETE FROM chat_messages WHERE id = ?").run(data.id);
+
+        let targetRoom = 'general';
+        if (data.channelType === 'teachers') {
+          targetRoom = 'teachers';
+        } else if (data.channelType === 'group' && data.groupId) {
+          targetRoom = `group-${data.groupId}`;
+        }
+
+        io.to(targetRoom).emit("chat:message:deleted", { id: data.id });
+      } catch (err) {
+        console.error("Failed to delete chat message:", err);
+      }
+    });
+
+    socket.on("chat:message:pin", (data: { id: number; isPinned: boolean; channelType: string; groupId?: number; userRole: string }) => {
+      if (!data || !data.id) return;
+      try {
+        if (data.userRole !== 'teacher' && data.userRole !== 'admin') return;
+
+        db.prepare("UPDATE chat_messages SET isPinned = ? WHERE id = ?").run(data.isPinned ? 1 : 0, data.id);
+
+        let targetRoom = 'general';
+        if (data.channelType === 'teachers') {
+          targetRoom = 'teachers';
+        } else if (data.channelType === 'group' && data.groupId) {
+          targetRoom = `group-${data.groupId}`;
+        }
+
+        io.to(targetRoom).emit("chat:message:pinned:updated", {
+          id: data.id,
+          isPinned: data.isPinned ? 1 : 0
+        });
+      } catch (err) {
+        console.error("Failed to pin/unpin message:", err);
+      }
+    });
+
+    socket.on("chat:join-group", (data: { groupId: number }) => {
+      if (!data || !data.groupId) return;
+      socket.join(`group-${data.groupId}`);
+    });
+
+    socket.on("chat:typing:status", (data: { channelType: string; groupId?: number; isTyping: boolean; userId: number; userName: string }) => {
+      if (!data) return;
+      let targetRoom = 'general';
+      if (data.channelType === 'teachers') {
+        targetRoom = 'teachers';
+      } else if (data.channelType === 'group' && data.groupId) {
+        targetRoom = `group-${data.groupId}`;
+      }
+      
+      // Broadcast who is typing to everyone else in this room
+      socket.to(targetRoom).emit("chat:typing:update", {
+        channelType: data.channelType,
+        groupId: data.groupId,
+        isTyping: data.isTyping,
+        userId: data.userId,
+        userName: data.userName
+      });
+    });
+
+    socket.on("chat:reaction:toggle", (data: { messageId: number; channelType: string; groupId?: number; emoji: string; userId: number; userName: string }) => {
+      if (!data || !data.messageId || !data.emoji || !data.userId) return;
+      
+      try {
+        // Check if user already put this emoji on this message
+        const existing = db.prepare("SELECT id FROM chat_reactions WHERE messageId = ? AND userId = ? AND emoji = ?")
+          .get(data.messageId, data.userId, data.emoji) as any;
+          
+        if (existing) {
+          db.prepare("DELETE FROM chat_reactions WHERE id = ?").run(existing.id);
+        } else {
+          db.prepare("INSERT OR IGNORE INTO chat_reactions (messageId, userId, userName, emoji) VALUES (?, ?, ?, ?)")
+            .run(data.messageId, data.userId, data.userName, data.emoji);
+        }
+        
+        // Fetch all present reactions for this message to broadcast unified state
+        const updatedReactions = db.prepare("SELECT * FROM chat_reactions WHERE messageId = ?").all(data.messageId);
+        
+        let targetRoom = 'general';
+        if (data.channelType === 'teachers') {
+          targetRoom = 'teachers';
+        } else if (data.channelType === 'group' && data.groupId) {
+          targetRoom = `group-${data.groupId}`;
+        }
+        
+        io.to(targetRoom).emit("chat:reaction:updated", {
+          messageId: data.messageId,
+          reactions: updatedReactions
+        });
+      } catch (err) {
+        console.error("Failed to toggle real-time chat reaction:", err);
+      }
     });
 
     // Handle Teacher Supervision Subscription
@@ -595,21 +1074,61 @@ async function startServer() {
     res.json({ status: "ok" });
   });
 
+  // --- Local Offline Assets Routes ---
+  app.get("/api/fonts/Amiri-Regular.ttf", (req, res) => {
+    if (fs.existsSync(AMIRI_FONT_PATH)) {
+      return res.sendFile(path.resolve(AMIRI_FONT_PATH));
+    }
+    res.status(404).send("Le fichier de police n'est pas encore mis en cache. Veuillez connecter le serveur à Internet ponctuellement ou le configurer.");
+  });
+
+  app.get("/api/assets/default-logo.png", (req, res) => {
+    if (fs.existsSync(OFPPT_LOGO_PATH)) {
+      res.setHeader("Content-Type", "image/png");
+      return res.sendFile(path.resolve(OFPPT_LOGO_PATH));
+    }
+    // Fallback offline SVG layout
+    res.setHeader("Content-Type", "image/svg+xml");
+    res.send(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+      <rect width="100" height="100" rx="20" fill="#059669"/>
+      <circle cx="50" cy="45" r="20" fill="none" stroke="white" stroke-width="8"/>
+      <path d="M35 70 L50 45 L65 70 Z" fill="white"/>
+      <text x="50" y="85" text-anchor="middle" fill="white" font-family="sans-serif" font-weight="extrabold" font-size="12">OFPPT</text>
+    </svg>`);
+  });
+
   // --- AI Routes ---
   app.post("/api/ai/generate-questions", authenticate, async (req: any, res) => {
     if (req.user.role === 'student') return res.status(403).json({ error: "Forbidden" });
-    const { topic, count, targetPoints, allowedTypes } = req.body;
     
     try {
-      const response = await ai.models.generateContent({
+      const settings = db.prepare("SELECT localAiEnabled, localAiUrl, localAiModel FROM settings WHERE id = 1").get() as any;
+      if (settings && settings.localAiEnabled) {
+        const localAiUrl = settings.localAiUrl || 'http://localhost:11434';
+        const localAiModel = settings.localAiModel || 'llama3';
+        console.log(`[Offline Local AI] Directing generate-questions to Ollama model ${localAiModel} on ${localAiUrl}`);
+        const text = await generateWithOllama(localAiUrl, localAiModel, req.body.prompt, req.body.config);
+        return res.json({ text });
+      }
+
+      const response = await getAI().models.generateContent({
         model: "gemini-3-flash-preview",
-        contents: req.body.prompt, // We'll pass the full prompt from the client proxy for now to minimize logic duplication, or better, re-assemble here.
+        contents: req.body.prompt,
         config: req.body.config
       });
       res.json({ text: response.text });
     } catch (err: any) {
       console.error("AI Error:", err);
-      res.status(500).json({ error: err.message });
+      const isNetwork = err.message?.includes("ENOTFOUND") || err.message?.includes("fetch failed") || !process.env.GEMINI_API_KEY;
+      if (isNetwork) {
+        res.status(503).json({ 
+          error: "Ce serveur n'est pas connecté à Internet ou la clé API Gemini est absente. " +
+                 "Pour utiliser l'intelligence artificielle hors-ligne à 100%, " +
+                 "veuillez configurer un serveur d'IA local (Ollama / LocalAI) dans l'onglet 'Extra' des paramètres de l'organisation." 
+        });
+      } else {
+        res.status(500).json({ error: err.message });
+      }
     }
   });
 
@@ -618,7 +1137,21 @@ async function startServer() {
     const { question } = req.body;
 
     try {
-      const response = await ai.models.generateContent({
+      const settings = db.prepare("SELECT localAiEnabled, localAiUrl, localAiModel FROM settings WHERE id = 1").get() as any;
+      if (settings && settings.localAiEnabled) {
+        const localAiUrl = settings.localAiUrl || 'http://localhost:11434';
+        const localAiModel = settings.localAiModel || 'llama3';
+        const prompt = `Améliore cette question d'examen pour la rendre plus claire, professionnelle et sans ambiguïté.
+Conserve le même type de question et le même sens, mais améliore le style et la structure.
+
+Question actuelle: ${JSON.stringify(question)}
+
+Répond uniquement avec l'objet JSON de la question mise à jour.`;
+        const text = await generateWithOllama(localAiUrl, localAiModel, prompt, { responseMimeType: "application/json" });
+        return res.json({ text });
+      }
+
+      const response = await getAI().models.generateContent({
         model: "gemini-3-flash-preview",
         contents: `Améliore cette question d'examen pour la rendre plus claire, professionnelle et sans ambiguïté.
         Conserve le même type de question et le même sens, mais améliore le style et la structure.
@@ -633,14 +1166,36 @@ async function startServer() {
       res.json({ text: response.text });
     } catch (err: any) {
       console.error("AI Error:", err);
-      res.status(500).json({ error: err.message });
+      const isNetwork = err.message?.includes("ENOTFOUND") || err.message?.includes("fetch failed") || !process.env.GEMINI_API_KEY;
+      if (isNetwork) {
+        res.status(503).json({ 
+          error: "Serveur hors-ligne. Veuillez activer l'IA locale (Ollama / LocalAI) dans l'onglet 'Extra' des paramètres."
+        });
+      } else {
+        res.status(500).json({ error: err.message });
+      }
     }
   });
 
   app.post("/api/ai/evaluate-short-answer", authenticate, async (req: any, res) => {
     const { question, expectedAnswer, studentAnswer } = req.body;
     try {
-      const response = await ai.models.generateContent({
+      const settings = db.prepare("SELECT localAiEnabled, localAiUrl, localAiModel FROM settings WHERE id = 1").get() as any;
+      if (settings && settings.localAiEnabled) {
+        const localAiUrl = settings.localAiUrl || 'http://localhost:11434';
+        const localAiModel = settings.localAiModel || 'llama3';
+        const prompt = `Évalue la réponse de l'étudiant par rapport à la réponse attendue pour la question donnée.
+Question : "${question}"
+Réponse attendue : "${expectedAnswer}"
+Réponse de l'étudiant : "${studentAnswer}"
+
+Donne un score entre 0 et 1 (0 = faux, 1 = parfait, entre les deux pour une réponse partiellement correcte).
+Répond exclusivement sous ce format JSON : {"score": 0.8}`;
+        const text = await generateWithOllama(localAiUrl, localAiModel, prompt, { responseMimeType: "application/json" });
+        return res.json({ text });
+      }
+
+      const response = await getAI().models.generateContent({
         model: "gemini-3-flash-preview",
         contents: `Évalue la réponse de l'étudiant par rapport à la réponse attendue pour la question donnée.
         Question : "${question}"
@@ -654,14 +1209,34 @@ async function startServer() {
       res.json({ text: response.text });
     } catch (err: any) {
       console.error("AI Error:", err);
-      res.status(500).json({ error: err.message });
+      const isNetwork = err.message?.includes("ENOTFOUND") || err.message?.includes("fetch failed") || !process.env.GEMINI_API_KEY;
+      if (isNetwork) {
+        res.status(503).json({ 
+          error: "Serveur hors-ligne. Veuillez activer l'IA locale (Ollama / LocalAI) dans l'onglet 'Extra' des paramètres."
+        });
+      } else {
+        res.status(500).json({ error: err.message });
+      }
     }
   });
 
   app.post("/api/ai/analyze-results", authenticate, async (req: any, res) => {
     const { examTitle, totalScore, totalPoints, resultsSummary } = req.body;
     try {
-      const response = await ai.models.generateContent({
+      const settings = db.prepare("SELECT localAiEnabled, localAiUrl, localAiModel FROM settings WHERE id = 1").get() as any;
+      if (settings && settings.localAiEnabled) {
+        const localAiUrl = settings.localAiUrl || 'http://localhost:11434';
+        const localAiModel = settings.localAiModel || 'llama3';
+        const prompt = `Tu es un conseiller pédagogique expert. Analyse les résultats d'un étudiant à l'examen "${examTitle}" et fournis un feedback constructif, motivant et personnalisé.
+Score final : ${totalScore}/${totalPoints} (${Math.round((totalScore / totalPoints) * 100)}%)
+Détails des questions :
+${resultsSummary}
+Rend un commentaire d'évaluation en français structuré sous format JSON : {"text": "..."}`;
+        const text = await generateWithOllama(localAiUrl, localAiModel, prompt, { responseMimeType: "application/json" });
+        return res.json({ text });
+      }
+
+      const response = await getAI().models.generateContent({
         model: "gemini-3-flash-preview",
         contents: `Tu es un conseiller pédagogique expert. Analyse les résultats d'un étudiant à l'examen "${examTitle}" et fournis un feedback constructif, motivant et personnalisé.
 
@@ -683,14 +1258,29 @@ Instructions pour le feedback :
       res.json({ text: response.text });
     } catch (err: any) {
       console.error("AI Error:", err);
-      res.status(500).json({ error: err.message });
+      const isNetwork = err.message?.includes("ENOTFOUND") || err.message?.includes("fetch failed") || !process.env.GEMINI_API_KEY;
+      if (isNetwork) {
+        res.status(503).json({ 
+          error: "Serveur hors-ligne. Veuillez activer l'IA locale (Ollama / LocalAI) dans l'onglet 'Extra' des paramètres."
+        });
+      } else {
+        res.status(500).json({ error: err.message });
+      }
     }
   });
 
   app.post("/api/ai/generic", authenticate, async (req: any, res) => {
     const { prompt, model, config } = req.body;
     try {
-      const response = await ai.models.generateContent({
+      const settings = db.prepare("SELECT localAiEnabled, localAiUrl, localAiModel FROM settings WHERE id = 1").get() as any;
+      if (settings && settings.localAiEnabled) {
+        const localAiUrl = settings.localAiUrl || 'http://localhost:11434';
+        const localAiModel = settings.localAiModel || 'llama3';
+        const text = await generateWithOllama(localAiUrl, localAiModel, prompt, config);
+        return res.json({ text });
+      }
+
+      const response = await getAI().models.generateContent({
         model: model || "gemini-3-flash-preview",
         contents: prompt,
         config: config
@@ -698,17 +1288,16 @@ Instructions pour le feedback :
       res.json({ text: response.text });
     } catch (err: any) {
       console.error("AI Error:", err);
-      res.status(500).json({ error: err.message });
+      const isNetwork = err.message?.includes("ENOTFOUND") || err.message?.includes("fetch failed") || !process.env.GEMINI_API_KEY;
+      if (isNetwork) {
+        res.status(503).json({ 
+          error: "Serveur hors-ligne. Veuillez activer l'IA locale (Ollama / LocalAI) dans l'onglet 'Extra' des paramètres."
+        });
+      } else {
+        res.status(500).json({ error: err.message });
+      }
     }
   });
-
-  const createLog = (userId: number, action: string, details: string) => {
-    try {
-      db.prepare("INSERT INTO audit_logs (userId, action, details) VALUES (?, ?, ?)").run(userId, action, details);
-    } catch (e) {
-      console.error("Failed to create audit log:", e);
-    }
-  };
 
   // --- Auth Routes ---
   app.post("/api/auth/signup", async (req, res) => {
@@ -719,9 +1308,19 @@ Instructions pour le feedback :
       const result = stmt.run(email, hashedPassword, displayName, role, groupName || null, filiere || null, groupId || null, filiereId || null);
       
       const userId = Number(result.lastInsertRowid);
-      const user = { id: userId, email, displayName, role, groupName, filiere, groupId, filiereId };
+      let sessionId = null;
+      if (role === 'student') {
+        sessionId = Math.random().toString(36).substring(2) + Date.now().toString(36);
+        db.prepare("UPDATE users SET activeSessionId = ? WHERE id = ?").run(sessionId, userId);
+      }
+      
+      const user = { id: userId, email, displayName, role, groupName, filiere, groupId, filiereId, sessionId };
       const token = jwt.sign(user, JWT_SECRET);
-      res.cookie("token", token, { httpOnly: true });
+      
+      createLog(userId, "INSCRIPTION", `Nouvelle inscription : ${displayName} (${role}).`);
+      updateOnlineUser(user);
+
+      res.cookie("token", token, { httpOnly: true, secure: true, sameSite: "none" });
       res.json({ user });
     } catch (err: any) {
       res.status(400).json({ error: err.message });
@@ -743,20 +1342,41 @@ Instructions pour le feedback :
     }
     
     const { password: _, groupNameResolved, filiereNameResolved, ...userWithoutPassword } = user;
+    
+    let sessionId = null;
+    if (user.role === 'student') {
+      sessionId = Math.random().toString(36).substring(2) + Date.now().toString(36);
+      db.prepare("UPDATE users SET activeSessionId = ? WHERE id = ?").run(sessionId, user.id);
+    }
+
     const userData = { 
       ...userWithoutPassword, 
       id: Number(userWithoutPassword.id),
       groupName: groupNameResolved || userWithoutPassword.groupName,
-      filiere: filiereNameResolved || userWithoutPassword.filiere
+      filiere: filiereNameResolved || userWithoutPassword.filiere,
+      sessionId
     };
     
     const token = jwt.sign(userData, JWT_SECRET);
-    res.cookie("token", token, { httpOnly: true });
+    
+    createLog(userData.id, "CONNEXION", `Connexion réussie : ${userData.displayName} (${userData.role}).`);
+    updateOnlineUser(userData);
+
+    res.cookie("token", token, { httpOnly: true, secure: true, sameSite: "none" });
     res.json({ user: userData });
   });
 
   app.post("/api/auth/logout", (req, res) => {
-    res.clearCookie("token");
+    const token = req.cookies.token;
+    if (token) {
+      try {
+        const decoded: any = jwt.verify(token, JWT_SECRET);
+        createLog(decoded.id, "DECONNEXION", "Déconnexion de la plateforme.");
+        // Remove from online users immediately
+        onlineUsers.delete(decoded.id);
+      } catch (err) {}
+    }
+    res.clearCookie("token", { httpOnly: true, secure: true, sameSite: "none" });
     res.json({ success: true });
   });
 
@@ -774,8 +1394,14 @@ Instructions pour le feedback :
       `).get(decoded.id) as any;
       
       if (!user) {
-        res.clearCookie("token");
+        res.clearCookie("token", { httpOnly: true, secure: true, sameSite: "none" });
         return res.json({ user: null });
+      }
+
+      // Check for dual session for student
+      if (user.role === 'student' && user.activeSessionId && decoded.sessionId !== user.activeSessionId) {
+        res.clearCookie("token", { httpOnly: true, secure: true, sameSite: "none" });
+        return res.status(401).json({ error: "DUAL_SESSION" });
       }
       
       const { password: _, groupNameResolved, filiereNameResolved, ...userWithoutPassword } = user;
@@ -783,13 +1409,14 @@ Instructions pour le feedback :
         ...userWithoutPassword, 
         id: Number(userWithoutPassword.id),
         groupName: groupNameResolved || userWithoutPassword.groupName,
-        filiere: filiereNameResolved || userWithoutPassword.filiere
+        filiere: filiereNameResolved || userWithoutPassword.filiere,
+        sessionId: decoded.sessionId
       };
       
       res.json({ user: userData });
     } catch (err) {
       console.error("JWT Auth error:", err);
-      res.clearCookie("token");
+      res.clearCookie("token", { httpOnly: true, secure: true, sameSite: "none" });
       res.json({ user: null });
     }
   });
@@ -817,11 +1444,12 @@ Instructions pour le feedback :
         ...userWithoutPassword, 
         id: Number(userWithoutPassword.id),
         groupName: groupNameResolved || userWithoutPassword.groupName,
-        filiere: filiereNameResolved || userWithoutPassword.filiere
+        filiere: filiereNameResolved || userWithoutPassword.filiere,
+        sessionId: req.user.activeSessionId
       };
       
       const token = jwt.sign(userData, JWT_SECRET);
-      res.cookie("token", token, { httpOnly: true });
+      res.cookie("token", token, { httpOnly: true, secure: true, sameSite: "none" });
       res.json({ user: userData });
     } catch (err: any) {
       res.status(400).json({ error: err.message });
@@ -1318,7 +1946,8 @@ Instructions pour le feedback :
     const parsedResults = results.map((r: any) => ({ 
       ...r, 
       answers: JSON.parse(r.answers),
-      questionResults: r.questionResults ? JSON.parse(r.questionResults) : null 
+      questionResults: r.questionResults ? JSON.parse(r.questionResults) : null,
+      auditTrail: r.auditTrail ? (r.auditTrail.startsWith('[') || r.auditTrail.startsWith('{') ? JSON.parse(r.auditTrail) : []) : []
     }));
     cacheManager.set(cacheKey, parsedResults, 300);
     res.json(parsedResults);
@@ -1345,7 +1974,8 @@ Instructions pour le feedback :
     const parsedResults = results.map((r: any) => ({ 
       ...r, 
       answers: JSON.parse(r.answers),
-      questionResults: r.questionResults ? JSON.parse(r.questionResults) : null 
+      questionResults: r.questionResults ? JSON.parse(r.questionResults) : null,
+      auditTrail: r.auditTrail ? (r.auditTrail.startsWith('[') || r.auditTrail.startsWith('{') ? JSON.parse(r.auditTrail) : []) : []
     }));
     cacheManager.set(cacheKey, parsedResults, 300);
     res.json(parsedResults);
@@ -1412,7 +2042,7 @@ Instructions pour le feedback :
   app.post("/api/results", authenticate, async (req: any, res) => {
     if (req.user.role !== 'student') return res.status(403).json({ error: "Forbidden" });
     try {
-      const { examId, answers } = req.body;
+      const { examId, answers, integrityScore, tabExitCount, fullscreenExitsCount, auditTrail } = req.body;
       if (!examId || !answers) {
         return res.status(400).json({ error: "Les champs examId et answers sont requis pour la notation." });
       }
@@ -1548,8 +2178,41 @@ Instructions pour le feedback :
         console.error("Feedback AI backend echoue:", aiErr);
       }
 
-      const stmt = db.prepare("INSERT INTO results (examId, studentId, score, totalQuestions, totalPoints, answers, questionResults, aiFeedback) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-      const result = stmt.run(examId, req.user.id, score, totalQuestions, totalPoints, JSON.stringify(answers), JSON.stringify(questionResults), aiFeedback);
+      const stmt = db.prepare("INSERT INTO results (examId, studentId, score, totalQuestions, totalPoints, answers, questionResults, aiFeedback, integrityScore, tabExitCount, fullscreenExitsCount, auditTrail) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+      const iScore = integrityScore !== undefined ? integrityScore : 100;
+      const tExits = tabExitCount !== undefined ? tabExitCount : 0;
+      const fsExits = fullscreenExitsCount !== undefined ? fullscreenExitsCount : 0;
+      const aTrail = auditTrail ? (typeof auditTrail === 'string' ? auditTrail : JSON.stringify(auditTrail)) : '[]';
+
+      const result = stmt.run(
+        examId, 
+        req.user.id, 
+        score, 
+        totalQuestions, 
+        totalPoints, 
+        JSON.stringify(answers), 
+        JSON.stringify(questionResults), 
+        aiFeedback,
+        iScore,
+        tExits,
+        fsExits,
+        aTrail
+      );
+
+      // Log student integrity result in standard audit_logs
+      if (iScore < 100) {
+        createLog(
+          req.user.id, 
+          'SEC_VIOLATION_RESULT', 
+          `Intégrité d'examen #${examId} : ${iScore}% (Sorties d'onglet: ${tExits}, Plein écran quitté: ${fsExits})`
+        );
+      } else {
+        createLog(
+          req.user.id, 
+          'EXAM_COMPLETED_SECURE', 
+          `Examen #${examId} terminé avec succès en mode sécurisé. Intégrité 100%`
+        );
+      }
 
       // Clean up exam session upon completion
       try {
@@ -1570,31 +2233,83 @@ Instructions pour le feedback :
 
   app.get("/api/notifications", authenticate, (req: any, res) => {
     let notifs;
-    if (req.user.role === 'teacher') {
+    if (req.user.role === 'teacher' || req.user.role === 'admin') {
       notifs = db.prepare(`
         SELECT n.*, (SELECT 1 FROM user_notifications un WHERE un.notificationId = n.id AND un.userId = ?) as isRead 
         FROM notifications n 
-        ORDER BY n.createdAt DESC
+        ORDER BY n.isPinned DESC, n.createdAt DESC
       `).all(req.user.id);
     } else {
-      // Students see global notifications (groupId NULL) or those targeted to their group
+      // Students see notifications matching their audience role and targeted to their scope (global, filiere, or group)
       notifs = db.prepare(`
         SELECT n.*, (SELECT 1 FROM user_notifications un WHERE un.notificationId = n.id AND un.userId = ?) as isRead
         FROM notifications n 
-        WHERE n.groupId IS NULL OR n.groupId = ? 
-        ORDER BY n.createdAt DESC
-      `).all(req.user.id, req.user.groupId);
+        WHERE (n.audienceRole IS NULL OR n.audienceRole = 'all' OR n.audienceRole = 'students')
+          AND (
+            (n.groupId IS NULL AND n.filiereId IS NULL)
+            OR (n.groupId = ?)
+            OR (n.filiereId = ? AND n.groupId IS NULL)
+          )
+        ORDER BY n.isPinned DESC, n.createdAt DESC
+      `).all(req.user.id, req.user.id, req.user.groupId, req.user.filiereId);
     }
-    res.json(notifs.map((n: any) => ({ ...n, read: !!n.isRead })));
+
+    // Attach comments, reactions and readers for full interactive and content enrichment
+    const enrichedNotifs = notifs.map((n: any) => {
+      let reactions: any[] = [];
+      let comments: any[] = [];
+      let readers: any[] = [];
+      
+      try { reactions = db.prepare("SELECT * FROM notification_reactions WHERE notificationId = ?").all(n.id); } catch(e){}
+      try { comments = db.prepare("SELECT * FROM notification_comments WHERE notificationId = ? ORDER BY createdAt ASC").all(n.id); } catch(e){}
+      
+      let readCountValue = 0;
+      if (req.user.role === 'teacher' || req.user.role === 'admin') {
+        try {
+          readers = db.prepare(`
+            SELECT u.id, u.displayName, u.email, un.readAt 
+            FROM user_notifications un 
+            JOIN users u ON un.userId = u.id 
+            WHERE un.notificationId = ?
+          `).all(n.id);
+          readCountValue = readers.length;
+        } catch (e){}
+      } else {
+        try {
+          const row = db.prepare("SELECT count(*) as count FROM user_notifications WHERE notificationId = ?").get(n.id) as any;
+          readCountValue = row?.count || 0;
+        } catch (e){}
+      }
+
+      return {
+        ...n,
+        read: !!n.isRead,
+        isPinned: !!n.isPinned,
+        reactions,
+        comments,
+        readers,
+        readCount: readCountValue
+      };
+    });
+
+    res.json(enrichedNotifs);
   });
 
   app.post("/api/notifications/read-all", authenticate, (req: any, res) => {
     try {
       let notifs;
-      if (req.user.role === 'teacher') {
+      if (req.user.role === 'teacher' || req.user.role === 'admin') {
         notifs = db.prepare("SELECT id FROM notifications").all();
       } else {
-        notifs = db.prepare("SELECT id FROM notifications WHERE groupId IS NULL OR groupId = ?").all(req.user.groupId);
+        notifs = db.prepare(`
+          SELECT id FROM notifications 
+          WHERE (audienceRole IS NULL OR audienceRole = 'all' OR audienceRole = 'students')
+            AND (
+              (groupId IS NULL AND filiereId IS NULL)
+              OR (groupId = ?)
+              OR (filiereId = ? AND groupId IS NULL)
+            )
+        `).all(req.user.groupId, req.user.filiereId);
       }
       
       const stmt = db.prepare("INSERT OR IGNORE INTO user_notifications (userId, notificationId) VALUES (?, ?)");
@@ -1625,16 +2340,37 @@ Instructions pour le feedback :
   app.post("/api/notifications", authenticate, (req: any, res) => {
     if (req.user.role === 'student') return res.status(403).json({ error: "Forbidden" });
     try {
-      const { title, content, groupId, type } = req.body;
-      const stmt = db.prepare("INSERT INTO notifications (title, content, teacherId, groupId, type) VALUES (?, ?, ?, ?, ?)");
-      const result = stmt.run(title, content, req.user.id, groupId || null, type || 'announcement');
+      const { title, content, groupId, filiereId, audienceRole, type, isPinned, importance, attachmentUrl, attachmentName } = req.body;
+      const stmt = db.prepare(`
+        INSERT INTO notifications (title, content, teacherId, groupId, filiereId, audienceRole, type, isPinned, importance, attachmentUrl, attachmentName) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      const result = stmt.run(
+        title, 
+        content, 
+        req.user.id, 
+        groupId || null,
+        filiereId || null,
+        audienceRole || 'all',
+        type || 'announcement', 
+        isPinned ? 1 : 0, 
+        importance || 'normal',
+        attachmentUrl || null,
+        attachmentName || null
+      );
       const notif = { 
         id: Number(result.lastInsertRowid), 
         title, 
         content, 
         teacherId: req.user.id, 
         groupId: groupId || null,
+        filiereId: filiereId || null,
+        audienceRole: audienceRole || 'all',
         type: type || 'announcement',
+        isPinned: isPinned ? 1 : 0,
+        importance: importance || 'normal',
+        attachmentUrl: attachmentUrl || null,
+        attachmentName: attachmentName || null,
         createdAt: new Date().toISOString() 
       };
 
@@ -1651,11 +2387,80 @@ Instructions pour le feedback :
     }
   });
 
+  app.post("/api/notifications/:id/toggle-pin", authenticate, (req: any, res) => {
+    if (req.user.role === 'student') return res.status(403).json({ error: "Forbidden" });
+    const { id } = req.params;
+    try {
+      const notif = db.prepare("SELECT isPinned FROM notifications WHERE id = ?").get(id) as any;
+      if (!notif) return res.status(404).json({ error: "Notification introuvable" });
+      const newPinValue = notif.isPinned ? 0 : 1;
+      db.prepare("UPDATE notifications SET isPinned = ? WHERE id = ?").run(newPinValue, id);
+      res.json({ success: true, isPinned: !!newPinValue });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/notifications/:id/react", authenticate, (req: any, res) => {
+    const { id } = req.params;
+    const { reactionType } = req.body;
+    try {
+      const row = db.prepare("SELECT id FROM notification_reactions WHERE notificationId = ? AND userId = ? AND reactionType = ?").get(id, req.user.id, reactionType);
+      if (row) {
+        db.prepare("DELETE FROM notification_reactions WHERE id = ?").run((row as any).id);
+        res.json({ success: true, action: 'removed' });
+      } else {
+        db.prepare(`
+          INSERT INTO notification_reactions (notificationId, userId, reactionType, userDisplayName) 
+          VALUES (?, ?, ?, ?)
+        `).run(id, req.user.id, reactionType, req.user.displayName);
+        res.json({ success: true, action: 'added' });
+      }
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/notifications/:id/comments", authenticate, (req: any, res) => {
+    const { id } = req.params;
+    const { content } = req.body;
+    try {
+      if (!content || !content.trim()) {
+        return res.status(400).json({ error: "Content is required" });
+      }
+      db.prepare(`
+        INSERT INTO notification_comments (notificationId, userId, userDisplayName, userRole, content) 
+        VALUES (?, ?, ?, ?, ?)
+      `).run(id, req.user.id, req.user.displayName, req.user.role, content);
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete("/api/notifications/comments/:commentId", authenticate, (req: any, res) => {
+    const { commentId } = req.params;
+    try {
+      const comment = db.prepare("SELECT * FROM notification_comments WHERE id = ?").get(commentId) as any;
+      if (!comment) return res.status(404).json({ error: "Commentaire introuvable" });
+      if (req.user.role === 'teacher' || req.user.role === 'admin' || comment.userId === req.user.id) {
+        db.prepare("DELETE FROM notification_comments WHERE id = ?").run(commentId);
+        res.json({ success: true });
+      } else {
+        res.status(403).json({ error: "Interdit" });
+      }
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.delete("/api/notifications/:id", authenticate, (req: any, res) => {
     if (req.user.role === 'student') return res.status(403).json({ error: "Forbidden" });
     const { id } = req.params;
     try {
       db.prepare("DELETE FROM user_notifications WHERE notificationId = ?").run(id);
+      db.prepare("DELETE FROM notification_reactions WHERE notificationId = ?").run(id);
+      db.prepare("DELETE FROM notification_comments WHERE notificationId = ?").run(id);
       db.prepare("DELETE FROM notifications WHERE id = ?").run(id);
       res.json({ success: true });
     } catch (err: any) {
@@ -1828,7 +2633,10 @@ Instructions pour le feedback :
           orgLogoBgColor: '#059669',
           orgLogoTextColor: '#ffffff',
           headerLines: [],
-          showHeaderLines: false
+          showHeaderLines: false,
+          localAiEnabled: false,
+          localAiUrl: 'http://localhost:11434',
+          localAiModel: 'llama3'
         });
       }
       res.json({
@@ -1851,6 +2659,14 @@ Instructions pour le feedback :
         showWatermark: !!settings.showWatermark,
         defaultExamSettings: settings.defaultExamSettings ? JSON.parse(settings.defaultExamSettings) : null,
         templates: settings.templates ? JSON.parse(settings.templates) : [],
+        localAiEnabled: !!settings.localAiEnabled,
+        localAiUrl: settings.localAiUrl || 'http://localhost:11434',
+        localAiModel: settings.localAiModel || 'llama3',
+        autoBackupEnabled: !!settings.autoBackupEnabled,
+        autoBackupInterval: settings.autoBackupInterval || 'daily',
+        autoBackupCount: settings.autoBackupCount !== null && settings.autoBackupCount !== undefined ? settings.autoBackupCount : 5,
+        autoBackupTime: settings.autoBackupTime || '02:00',
+        autoBackupLastRun: settings.autoBackupLastRun || null
       });
     } catch (err) {
       console.error("Error fetching settings:", err);
@@ -1866,9 +2682,17 @@ Instructions pour le feedback :
       footerFontSize, footerFontFamily, watermarkText, showWatermark, watermarkColor, watermarkOpacity,
       showFooterText, showFooterTable,
       regionName, academicYear, orgLogoBgColor, orgLogoTextColor, 
-      headerLines, headerColumns, footerColumns, showHeaderLines, showFooterLines, ccRules, templates, defaultExamSettings
+      headerLines, headerColumns, footerColumns, showHeaderLines, showFooterLines, ccRules, templates, defaultExamSettings,
+      localAiEnabled, localAiUrl, localAiModel,
+      autoBackupEnabled, autoBackupInterval, autoBackupCount, autoBackupTime
     } = req.body;
     try {
+      const current = db.prepare("SELECT * FROM settings WHERE id = 1").get() as any;
+      const autoBackupEnabled_val = autoBackupEnabled !== undefined ? (autoBackupEnabled ? 1 : 0) : (current ? current.autoBackupEnabled : 0);
+      const autoBackupInterval_val = autoBackupInterval !== undefined ? autoBackupInterval : (current ? current.autoBackupInterval : 'daily');
+      const autoBackupCount_val = autoBackupCount !== undefined ? Number(autoBackupCount) : (current ? current.autoBackupCount : 5);
+      const autoBackupTime_val = autoBackupTime !== undefined ? autoBackupTime : (current ? current.autoBackupTime : '02:00');
+
       db.prepare(`
         UPDATE settings 
         SET orgName = ?, orgNameArabic = ?, orgNameFrench = ?, regionalDirection = ?, 
@@ -1877,7 +2701,10 @@ Instructions pour le feedback :
             footerFontSize = ?, footerFontFamily = ?, watermarkText = ?, showWatermark = ?, watermarkColor = ?, watermarkOpacity = ?,
             showFooterText = ?, showFooterTable = ?,
             regionName = ?, academicYear = ?, orgLogoBgColor = ?, orgLogoTextColor = ?, 
-            headerLines = ?, headerColumns = ?, footerColumns = ?, showHeaderLines = ?, showFooterLines = ?, ccRules = ?, templates = ?, defaultExamSettings = ?, updatedAt = CURRENT_TIMESTAMP
+            headerLines = ?, headerColumns = ?, footerColumns = ?, showHeaderLines = ?, showFooterLines = ?, ccRules = ?, templates = ?, defaultExamSettings = ?,
+            localAiEnabled = ?, localAiUrl = ?, localAiModel = ?,
+            autoBackupEnabled = ?, autoBackupInterval = ?, autoBackupCount = ?, autoBackupTime = ?,
+            updatedAt = CURRENT_TIMESTAMP
         WHERE id = 1
       `).run(
         orgName, orgNameArabic, orgNameFrench, regionalDirection, institutionName, 
@@ -1886,7 +2713,9 @@ Instructions pour le feedback :
         showFooterText ? 1 : 0, showFooterTable ? 1 : 0,
         regionName, academicYear, orgLogoBgColor, orgLogoTextColor, 
         JSON.stringify(headerLines), JSON.stringify(headerColumns), JSON.stringify(footerColumns), showHeaderLines ? 1 : 0, showFooterLines ? 1 : 0, 
-        JSON.stringify(ccRules), JSON.stringify(templates), JSON.stringify(defaultExamSettings)
+        JSON.stringify(ccRules), JSON.stringify(templates), JSON.stringify(defaultExamSettings),
+        localAiEnabled ? 1 : 0, localAiUrl, localAiModel,
+        autoBackupEnabled_val, autoBackupInterval_val, autoBackupCount_val, autoBackupTime_val
       );
       
       const updated = db.prepare("SELECT * FROM settings WHERE id = 1").get() as any;
@@ -1904,21 +2733,587 @@ Instructions pour le feedback :
         showFooterLines: !!updated.showFooterLines,
         showWatermark: !!updated.showWatermark,
         templates: updated.templates ? JSON.parse(updated.templates) : [],
-        defaultExamSettings: updated.defaultExamSettings ? JSON.parse(updated.defaultExamSettings) : null
+        defaultExamSettings: updated.defaultExamSettings ? JSON.parse(updated.defaultExamSettings) : null,
+        localAiEnabled: !!updated.localAiEnabled,
+        localAiUrl: updated.localAiUrl,
+        localAiModel: updated.localAiModel,
+        autoBackupEnabled: !!updated.autoBackupEnabled,
+        autoBackupInterval: updated.autoBackupInterval || 'daily',
+        autoBackupCount: updated.autoBackupCount !== null && updated.autoBackupCount !== undefined ? updated.autoBackupCount : 5,
+        autoBackupTime: updated.autoBackupTime || '02:00',
+        autoBackupLastRun: updated.autoBackupLastRun || null
       });
       createLog(req.user.id, "UPDATE_SETTINGS", "Modification des paramètres de l'organisation");
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
-  
-  // --- Backup & Restore ---
+
+  // --- Backup & Restore & Diagnostics ---
+  app.get("/api/admin/db-diagnostic", authenticate, async (req: any, res) => {
+    if (req.user.role === 'student') return res.status(403).json({ error: "Forbidden" });
+    try {
+      const pragmaCheck = db.prepare("PRAGMA integrity_check").get() as any;
+      const integrityFlag = pragmaCheck ? Object.values(pragmaCheck)[0] as string : "unknown";
+      
+      let dbSize = 0;
+      if (fs.existsSync("eduqcm.db")) {
+        dbSize = fs.statSync("eduqcm.db").size;
+      }
+      
+      const counts = {
+        users: 0,
+        groups: 0,
+        modules: 0,
+        exams: 0,
+        questions: 0,
+        results: 0,
+        logs: 0
+      };
+      
+      const tables = [
+        { key: "users", table: "users" },
+        { key: "groups", table: "groups" },
+        { key: "modules", table: "modules" },
+        { key: "exams", table: "exams" },
+        { key: "questions", table: "exam_questions" },
+        { key: "results", table: "exam_results" },
+        { key: "logs", table: "audit_logs" }
+      ];
+      
+      for (const t of tables) {
+        try {
+          const row = db.prepare(`SELECT COUNT(*) as count FROM ${t.table}`).get() as any;
+          if (row) counts[t.key] = row.count;
+        } catch (e) {}
+      }
+      
+      res.json({
+        integrity: integrityFlag,
+        size: dbSize,
+        counts
+      });
+    } catch (err: any) {
+      console.error("Diagnostic error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/admin/db-vacuum", authenticate, async (req: any, res) => {
+    if (req.user.role === 'student') return res.status(403).json({ error: "Forbidden" });
+    try {
+      createLog(req.user.id, "OPTIMIZE_DB", "Optimisation de la base de données (VACUUM)");
+      db.pragma("vacuum");
+      db.pragma("optimize");
+      
+      let dbSize = 0;
+      if (fs.existsSync("eduqcm.db")) {
+        dbSize = fs.statSync("eduqcm.db").size;
+      }
+      
+      res.json({ success: true, size: dbSize, message: "La base de données a été compactée et optimisée avec succès !" });
+    } catch (err: any) {
+      console.error("Vacuum error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get("/api/admin/backup", authenticate, async (req: any, res) => {
     if (req.user.role === 'student') return res.status(403).json({ error: "Forbidden" });
+    const format = req.query.format;
+    
+    if (format === "zip") {
+      const backupDbPath = `db-${Date.now()}.db`;
+      try {
+        db.pragma("optimize");
+        await db.backup(backupDbPath);
+        
+        const users = db.prepare("SELECT id, email, displayName, role, groupName, filiere, groupId, filiereId, badge, points, createdAt FROM users").all() || [];
+        const groups = db.prepare("SELECT * FROM groups").all() || [];
+        const modules = db.prepare("SELECT * FROM modules").all() || [];
+        const exams = db.prepare("SELECT id, title, description, moduleId, teacherId, isOnline, isLive, duration, totalPoints, status, successScore, createdAt FROM exams").all() || [];
+        const questions = db.prepare("SELECT * FROM exam_questions").all() || [];
+        const results = db.prepare("SELECT * FROM exam_results").all() || [];
+        const logs = db.prepare("SELECT * FROM audit_logs").all() || [];
+        
+        const convertToCSV = (arr: any[]) => {
+          if (!arr || arr.length === 0) return "";
+          const headers = Object.keys(arr[0]);
+          const csvLines = [headers.join(",")];
+          for (const item of arr) {
+            const values = headers.map(header => {
+              const val = item[header];
+              if (val === null || val === undefined) return '""';
+              const strVal = String(val).replace(/"/g, '""');
+              if (strVal.includes(",") || strVal.includes("\n") || strVal.includes('"')) {
+                return `"${strVal}"`;
+              }
+              return strVal;
+            });
+            csvLines.push(values.join(","));
+          }
+          return csvLines.join("\n");
+        };
+
+        const zip = new AdmZip();
+        zip.addLocalFile(backupDbPath, "", "eduqcm-backup.db");
+        
+        zip.addFile("csv/utilisateurs.csv", Buffer.from(convertToCSV(users), "utf-8"));
+        zip.addFile("csv/groupes.csv", Buffer.from(convertToCSV(groups), "utf-8"));
+        zip.addFile("csv/modules.csv", Buffer.from(convertToCSV(modules), "utf-8"));
+        zip.addFile("csv/examens.csv", Buffer.from(convertToCSV(exams), "utf-8"));
+        zip.addFile("csv/questions.csv", Buffer.from(convertToCSV(questions), "utf-8"));
+        zip.addFile("csv/resultats_examens.csv", Buffer.from(convertToCSV(results), "utf-8"));
+        zip.addFile("csv/journaux_audit.csv", Buffer.from(convertToCSV(logs), "utf-8"));
+        
+        const metadata = {
+          exportDate: new Date().toISOString(),
+          exportedBy: req.user.email,
+          records: {
+            users: users.length,
+            groups: groups.length,
+            modules: modules.length,
+            exams: exams.length,
+            questions: questions.length,
+            results: results.length,
+            logs: logs.length
+          },
+          system: "EduQCM Intranet Node-Engine"
+        };
+        zip.addFile("backup-metadata.json", Buffer.from(JSON.stringify(metadata, null, 2), "utf-8"));
+        
+        const buildInteractiveHTML = () => {
+          return `<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EduQCM - Dashboard de Consultation Hors-ligne</title>
+  <style>
+    :root {
+      --primary: #059669;
+      --primary-hover: #047857;
+      --indigo: #4f46e5;
+      --indigo-hover: #4338ca;
+      --slate-50: #f8fafc;
+      --slate-100: #f1f5f9;
+      --slate-200: #e2e8f0;
+      --slate-700: #334155;
+      --slate-800: #1e293b;
+      --slate-900: #0f172a;
+    }
+    
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #f8fafc;
+      color: #1e293b;
+      padding: 24px;
+    }
+
+    header {
+      background: white;
+      padding: 24px;
+      border-radius: 20px;
+      margin-bottom: 24px;
+      box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05);
+      border: 1px solid #e2e8f0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .title-group h1 {
+      font-size: 24px;
+      font-weight: 800;
+      color: var(--slate-900);
+      letter-spacing: -0.025em;
+    }
+
+    .title-group p {
+      font-size: 13px;
+      color: #64748b;
+      margin-top: 4px;
+    }
+
+    .badge-lan {
+      background: #ecfdf5;
+      color: #047857;
+      padding: 6px 12px;
+      border-radius: 9999px;
+      font-size: 12px;
+      font-weight: 700;
+      border: 1px solid #a7f3d0;
+    }
+
+    .grid-stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    .stat-card {
+      background: white;
+      padding: 20px;
+      border-radius: 16px;
+      border: 1px solid #e2e8f0;
+      box-shadow: 0 1px 3px rgb(0 0 0 / 0.02);
+    }
+
+    .stat-label {
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #64748b;
+      margin-bottom: 6px;
+    }
+
+    .stat-val {
+      font-size: 28px;
+      font-weight: 900;
+      color: var(--slate-900);
+    }
+
+    .main-card {
+      background: white;
+      border-radius: 20px;
+      border: 1px solid #e2e8f0;
+      box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05);
+      overflow: hidden;
+    }
+
+    .tabs {
+      display: flex;
+      background: var(--slate-50);
+      border-bottom: 1px solid #e2e8f0;
+      overflow-x: auto;
+    }
+
+    .tab-btn {
+      padding: 16px 24px;
+      border: none;
+      background: none;
+      font-size: 13px;
+      font-weight: 700;
+      color: #64748b;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.2s;
+      border-bottom: 2px solid transparent;
+    }
+
+    .tab-btn:hover {
+      color: var(--indigo);
+      background: #f1f5f9;
+    }
+
+    .tab-btn.active {
+      color: var(--indigo);
+      border-bottom-color: var(--indigo);
+      background: white;
+    }
+
+    .search-panel {
+      padding: 20px;
+      border-bottom: 1px solid #e2e8f0;
+      background: #fbfcfd;
+      display: flex;
+      gap: 12px;
+    }
+
+    .search-input {
+      flex: 1;
+      padding: 12px 16px;
+      border: 2px solid #e2e8f0;
+      border-radius: 12px;
+      font-size: 14px;
+      font-weight: 500;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .search-input:focus {
+      border-color: var(--indigo);
+    }
+
+    .table-container {
+      overflow-x: auto;
+      max-height: 600px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 13px;
+    }
+
+    th {
+      background: var(--slate-50);
+      padding: 14px 20px;
+      font-weight: 700;
+      color: #475569;
+      text-transform: uppercase;
+      font-size: 11px;
+      letter-spacing: 0.05em;
+      border-bottom: 1px solid var(--slate-200);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    td {
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--slate-100);
+      color: #334155;
+    }
+
+    tr:hover td {
+      background: var(--slate-50);
+    }
+
+    .score-badge {
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-weight: 700;
+      font-size: 11px;
+    }
+
+    .badge-success { background: #d1fae5; color: #065f46; }
+    .badge-danger { background: #fee2e2; color: #991b1b; }
+    .badge-neutral { background: #f1f5f9; color: #475569; }
+
+    .role-badge {
+      display: inline-block;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+    .role-admin { background: #fee2e2; color: #991b1b; }
+    .role-teacher { background: #e0e7ff; color: #3730a3; }
+    .role-student { background: #f0fdf4; color: #166534; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="title-group">
+      <h1>EduQCM - Portail de Consultation Hors-ligne</h1>
+      <p>Généré le ${new Date().toLocaleDateString("fr-FR")} à ${new Date().toLocaleTimeString("fr-FR")} • Exporté par : ${req.user.email}</p>
+    </div>
+    <span class="badge-lan">Mode Intranet / Archive</span>
+  </header>
+
+  <div class="grid-stats">
+    <div class="stat-card">
+      <div class="stat-label">Utilisateurs</div>
+      <div class="stat-val">\${stats.users}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Groupes</div>
+      <div class="stat-val">\${stats.groups}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Modules</div>
+      <div class="stat-val">\${stats.modules}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Examens</div>
+      <div class="stat-val">\${stats.exams}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Questions</div>
+      <div class="stat-val">\${stats.questions}</div>
+    </div>
+  </div>
+
+  <div class="main-card">
+    <div class="tabs">
+      <button class="tab-btn active" onclick="switchTab('exams')">Examens (\${stats.exams})</button>
+      <button class="tab-btn" onclick="switchTab('users')">Utilisateurs (\${stats.users})</button>
+      <button class="tab-btn" onclick="switchTab('groups')">Groupes (\${stats.groups})</button>
+      <button class="tab-btn" onclick="switchTab('logs')">Journaux d'Audit (\${stats.logs})</button>
+    </div>
+
+    <div class="search-panel">
+      <input type="text" id="searchBar" class="search-input" placeholder="Filtrer et rechercher instantanément..." oninput="filterData()" />
+    </div>
+
+    <div class="table-container">
+      <table id="dataTable">
+        <thead id="tableHead"></thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    const stats = ${JSON.stringify(metadata.records)};
+    const users = ${JSON.stringify(users)};
+    const groups = ${JSON.stringify(groups)};
+    const exams = ${JSON.stringify(exams)};
+    const logs = ${JSON.stringify(logs)};
+
+    let currentTab = 'exams';
+
+    function switchTab(tab) {
+      currentTab = tab;
+      document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+      event.target.classList.add('active');
+      document.getElementById('searchBar').value = '';
+      renderTable();
+    }
+
+    function renderTable() {
+      const head = document.getElementById('tableHead');
+      const body = document.getElementById('tableBody');
+      head.innerHTML = '';
+      body.innerHTML = '';
+
+      if (currentTab === 'exams') {
+        head.innerHTML = \`
+          <tr>
+            <th>ID</th>
+            <th>Titre</th>
+            <th>Description</th>
+            <th>Note Max</th>
+            <th>Durée</th>
+            <th>Statut</th>
+          </tr>
+        \`;
+        exams.forEach(x => {
+          body.innerHTML += \`
+            <tr>
+              <td style="font-weight:bold;">#\${x.id}</td>
+              <td style="font-weight:bold;">\${x.title || ''}</td>
+              <td>\${x.description || 'Sans'}</td>
+              <td style="font-weight:bold;">\${x.totalPoints} pts</td>
+              <td>\${x.duration} min</td>
+              <td>
+                <span class="score-badge \${x.status === 'publie' || x.status === 'active' ? 'badge-success' : 'badge-neutral'}">
+                  \${x.status}
+                </span>
+              </td>
+            </tr>
+          \`;
+        });
+      } else if (currentTab === 'users') {
+        head.innerHTML = \`
+          <tr>
+            <th>ID</th>
+            <th>Email</th>
+            <th>Nom Complet</th>
+            <th>Rôle</th>
+            <th>Groupe</th>
+            <th>Points</th>
+          </tr>
+        \`;
+        users.forEach(u => {
+          let roleBadge = 'role-student';
+          if (u.role === 'admin') roleBadge = 'role-admin';
+          if (u.role === 'teacher') roleBadge = 'role-teacher';
+          
+          body.innerHTML += \`
+            <tr>
+              <td>#\${u.id}</td>
+              <td style="font-weight:bold;">\${u.email}</td>
+              <td style="font-weight:bold;">\${u.displayName || ''}</td>
+              <td><span class="role-badge \${roleBadge}">\${u.role}</span></td>
+              <td>\${u.groupName || 'Aucun'}</td>
+              <td>\${u.points || 0} pts</td>
+            </tr>
+          \`;
+        });
+      } else if (currentTab === 'groups') {
+        head.innerHTML = \`
+          <tr>
+            <th>ID</th>
+            <th>Nom de Groupe</th>
+            <th>Niveau</th>
+            <th>Filière de formation</th>
+          </tr>
+        \`;
+        groups.forEach(g => {
+          body.innerHTML += \`
+            <tr>
+              <td>#\${g.id}</td>
+              <td style="font-weight:bold;">\${g.name}</td>
+              <td>\${g.level || ''}</td>
+              <td>\${g.schoolBranch || ''}</td>
+            </tr>
+          \`;
+        });
+      } else if (currentTab === 'logs') {
+        head.innerHTML = \`
+          <tr>
+            <th>ID</th>
+            <th>User ID</th>
+            <th>Action</th>
+            <th>Détails</th>
+            <th>Horodatage</th>
+          </tr>
+        \`;
+        logs.reverse().forEach(l => {
+          body.innerHTML += \`
+            <tr>
+              <td>#\${l.id}</td>
+              <td>Utilisateur #\${l.userId}</td>
+              <td style="font-weight:bold;color:var(--indigo);">\${l.action}</td>
+              <td>\${l.details || ''}</td>
+              <td>\${new Date(l.timestamp).toLocaleString()}</td>
+            </tr>
+          \`;
+        });
+      }
+    }
+
+    function filterData() {
+      const q = document.getElementById('searchBar').value.toLowerCase();
+      const rows = document.querySelectorAll('#dataTable tbody tr');
+      rows.forEach(row => {
+        const text = row.innerText.toLowerCase();
+        row.style.display = text.includes(q) ? '' : 'none';
+      });
+    }
+
+    renderTable();
+  </script>
+</body>
+</html>`;
+        };
+
+        zip.addFile("index.html", Buffer.from(buildInteractiveHTML(), "utf-8"));
+        const zipBuffer = zip.toBuffer();
+        
+        if (fs.existsSync(backupDbPath)) fs.unlinkSync(backupDbPath);
+        
+        createLog(req.user.id, "EXPORT_DB_COMPLET", "Exportation complète de la base de données au format ZIP d'intranet.");
+        
+        res.setHeader("Content-Type", "application/zip");
+        res.setHeader("Content-Disposition", "attachment; filename=eduqcm-complete-export.zip");
+        return res.send(zipBuffer);
+        
+      } catch (err: any) {
+        console.error("ZIP Complete export failed:", err);
+        if (fs.existsSync(backupDbPath)) fs.unlinkSync(backupDbPath);
+        return res.status(500).json({ error: "Échec de la génération de l'archive complète ZIP." });
+      }
+    }
+    
+    // Normal binary download
     const backupPath = `backup-${Date.now()}.db`;
     try {
       await db.backup(backupPath);
-      createLog(req.user.id, "EXPORT_DB", "Exportation de la base de données");
+      createLog(req.user.id, "EXPORT_DB", "Exportation simple de la base de données (.db)");
       res.download(backupPath, "eduqcm-backup.db", (err) => {
         if (fs.existsSync(backupPath)) fs.unlinkSync(backupPath);
       });
@@ -1932,56 +3327,64 @@ Instructions pour le feedback :
     if (req.user.role === 'student') return res.status(403).json({ error: "Forbidden" });
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
+    const tempPath = req.file.path;
+    const isZip = req.file.originalname.toLowerCase().endsWith(".zip") || req.file.mimetype === "application/zip";
+
     try {
-      const tempPath = req.file.path;
-      console.log(`Starting database restore with file: ${tempPath}`);
-      
-      // Close current connection
-      db.close();
-      console.log("Database connection closed.");
-      
-      // Anti-orphan logic: Cleanup all exported docx files in uploads before restore
-      if (fs.existsSync("uploads")) {
-        const files = fs.readdirSync("uploads");
-        for (const file of files) {
-          // Don't delete the current upload file!
-          if (file !== req.file.filename && (file.endsWith(".docx") || file.includes("exam_"))) {
-            try { 
-              fs.unlinkSync(path.join("uploads", file)); 
-              console.log(`[RESTORE] Deleted orphaned file during restore: ${file}`);
-            } catch (e) {
-              console.warn(`[RESTORE] Failed to delete file ${file}:`, e);
-            }
-          }
+      console.log(`Starting database restore with file: ${tempPath} (ZIP: ${isZip})`);
+
+      if (isZip) {
+        const zip = new AdmZip(tempPath);
+        const zipEntries = zip.getEntries();
+        const dbEntry = zipEntries.find(entry => entry.entryName === "eduqcm-backup.db");
+        
+        if (!dbEntry) {
+          if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+          return res.status(400).json({ error: "Cette archive ZIP est incompatible ou ne contient pas de fichier eduqcm-backup.db à restaurer." });
         }
+        
+        // Save the raw DB file to a temporary location
+        const extractedTempDb = `extracted-${Date.now()}.db`;
+        fs.writeFileSync(extractedTempDb, dbEntry.getData());
+        
+        // Safely close connection before overwrite
+        db.close();
+        console.log("Database connection closed for ZIP restore.");
+        
+        // Remove WAL/SHM file
+        const walFile = "eduqcm.db-wal";
+        const shmFile = "eduqcm.db-shm";
+        if (fs.existsSync(walFile)) { try { fs.unlinkSync(walFile); } catch (e) {} }
+        if (fs.existsSync(shmFile)) { try { fs.unlinkSync(shmFile); } catch (e) {} }
+        
+        // Overwrite
+        fs.copyFileSync(extractedTempDb, "eduqcm.db");
+        fs.unlinkSync(extractedTempDb);
+        fs.unlinkSync(tempPath);
+      } else {
+        // Simple raw database overwrite
+        db.close();
+        console.log("Database connection closed for SQLITE restore.");
+        
+        const walFile = "eduqcm.db-wal";
+        const shmFile = "eduqcm.db-shm";
+        if (fs.existsSync(walFile)) { try { fs.unlinkSync(walFile); } catch (e) {} }
+        if (fs.existsSync(shmFile)) { try { fs.unlinkSync(shmFile); } catch (e) {} }
+        
+        fs.copyFileSync(tempPath, "eduqcm.db");
+        fs.unlinkSync(tempPath);
       }
-      
-      // SQLite WAL files cleanup
-      const walFile = "eduqcm.db-wal";
-      const shmFile = "eduqcm.db-shm";
-      if (fs.existsSync(walFile)) {
-        try { fs.unlinkSync(walFile); console.log("Deleted WAL file."); } catch (e) { console.warn("Could not delete WAL file:", e); }
-      }
-      if (fs.existsSync(shmFile)) {
-        try { fs.unlinkSync(shmFile); console.log("Deleted SHM file."); } catch (e) { console.warn("Could not delete SHM file:", e); }
-      }
-      
-      // Replace file
-      fs.copyFileSync(tempPath, "eduqcm.db");
-      fs.unlinkSync(tempPath);
-      console.log("Database file replaced successfully.");
-      
+
       // Re-init connection
       db = new Database("eduqcm.db");
       db.pragma("journal_mode = WAL");
       db.pragma("foreign_keys = ON");
-      console.log("Database connection re-opened.");
+      console.log("Database connection re-opened after restore.");
       
-      createLog(req.user.id, "RESTORE_DB", "Restauration de la base de données");
-      res.json({ success: true, message: "Base de données restaurée avec succès. Veuillez rafraîchir la page." });
+      createLog(req.user.id, "RESTORE_DB", `Restauration de la base de données effectuée (${isZip ? 'Archive ZIP' : 'Binaire DB'})`);
+      res.json({ success: true, message: "La base de données a été restaurée avec succès." });
     } catch (err: any) {
       console.error("Restore error:", err);
-      // Try to recover by re-opening the original database if possible
       try {
         db = new Database("eduqcm.db");
         db.pragma("journal_mode = WAL");
@@ -1989,7 +3392,277 @@ Instructions pour le feedback :
       } catch (recoverErr) {
         console.error("Failed to recover database connection:", recoverErr);
       }
-      res.status(500).json({ error: "Échec de la restauration de la base de données: " + err.message });
+      res.status(500).json({ error: "Échec de l'import : " + err.message });
+    }
+  });
+
+  // --- Scheduled Automatic Backups: System Functions & Routes ---
+
+  // Custom helper to perform the actual SQLite auto backup with rotation retention
+  async function performAutoBackup() {
+    try {
+      const settings = db.prepare("SELECT autoBackupEnabled, autoBackupInterval, autoBackupCount, autoBackupTime FROM settings WHERE id = 1").get() as any;
+      if (!settings || !settings.autoBackupEnabled) return;
+
+      const backupDir = path.join(process.cwd(), "autobackups");
+      if (!fs.existsSync(backupDir)) {
+        fs.mkdirSync(backupDir, { recursive: true });
+      }
+
+      // Format timestamp without colons or dots for filename safety
+      const now = new Date();
+      const YYYY = now.getFullYear();
+      const MM = String(now.getMonth() + 1).padStart(2, '0');
+      const DD = String(now.getDate()).padStart(2, '0');
+      const HH = String(now.getHours()).padStart(2, '0');
+      const mm = String(now.getMinutes()).padStart(2, '0');
+      const ss = String(now.getSeconds()).padStart(2, '0');
+      
+      const backupFileName = `backup-auto-${YYYY}-${MM}-${DD}_${HH}-${mm}-${ss}.db`;
+      const backupFilePath = path.join(backupDir, backupFileName);
+
+      db.pragma("optimize");
+      await db.backup(backupFilePath);
+      console.log(`[AUTO-BACKUP] Created automatic backup: ${backupFileName}`);
+
+      // Update the settings table with run datetime
+      db.prepare("UPDATE settings SET autoBackupLastRun = ? WHERE id = 1").run(now.toISOString());
+
+      // Find and rotate previous automatic backups
+      const files = fs.readdirSync(backupDir)
+        .filter(f => f.startsWith("backup-auto-") && f.endsWith(".db"))
+        .map(f => {
+          const fp = path.join(backupDir, f);
+          return { name: f, path: fp, mtime: fs.statSync(fp).mtime.getTime() };
+        });
+
+      // Sort chronological ascending (oldest first)
+      files.sort((a, b) => a.mtime - b.mtime);
+
+      const countToKeep = settings.autoBackupCount || 5;
+      while (files.length > countToKeep) {
+        const oldest = files.shift();
+        if (oldest) {
+          try {
+            fs.unlinkSync(oldest.path);
+            console.log(`[AUTO-BACKUP] Rotated (deleted) old backup: ${oldest.name}`);
+          } catch (e) {
+            console.error(`[AUTO-BACKUP] Rotation failed to delete ${oldest.name}:`, e);
+          }
+        }
+      }
+    } catch (err) {
+      console.error("[AUTO-BACKUP] Error running automatic backup process:", err);
+    }
+  }
+
+  // Scheduler evaluation function
+  async function checkAutoBackupSchedule() {
+    try {
+      const settings = db.prepare("SELECT autoBackupEnabled, autoBackupInterval, autoBackupCount, autoBackupTime, autoBackupLastRun FROM settings WHERE id = 1").get() as any;
+      if (!settings || !settings.autoBackupEnabled) return;
+
+      const now = new Date();
+      const lastRun = settings.autoBackupLastRun ? new Date(settings.autoBackupLastRun) : null;
+      
+      const [targetHour, targetMin] = (settings.autoBackupTime || "02:00").split(":").map(Number);
+      const currentHour = now.getHours();
+      const currentMin = now.getMinutes();
+
+      // Check if current time of day is >= scheduled time
+      const timeTriggerMet = (currentHour > targetHour) || (currentHour === targetHour && currentMin >= targetMin);
+
+      let shouldBackup = false;
+
+      if (!lastRun) {
+        shouldBackup = timeTriggerMet;
+      } else {
+        const diffMs = now.getTime() - lastRun.getTime();
+        const diffDays = diffMs / (1000 * 60 * 60 * 24);
+
+        if (settings.autoBackupInterval === 'daily') {
+          const isNewDay = now.getDate() !== lastRun.getDate() || now.getMonth() !== lastRun.getMonth() || now.getFullYear() !== lastRun.getFullYear();
+          shouldBackup = isNewDay && timeTriggerMet;
+        } else if (settings.autoBackupInterval === 'weekly') {
+          shouldBackup = (diffDays >= 7) && timeTriggerMet;
+        } else if (settings.autoBackupInterval === 'monthly') {
+          const isNewMonth = now.getMonth() !== lastRun.getMonth() || now.getFullYear() !== lastRun.getFullYear();
+          shouldBackup = isNewMonth && timeTriggerMet;
+        }
+      }
+
+      if (shouldBackup) {
+        console.log(`[AUTO-BACKUP] Trigger condition met. Last run: ${settings.autoBackupLastRun || 'Never'}. Running auto-backup now...`);
+        await performAutoBackup();
+      }
+    } catch (err) {
+      console.error("[AUTO-BACKUP] Error during evaluation of scheduler conditions:", err);
+    }
+  }
+
+  // Setup periodic scheduler (evaluates once every 5 minutes)
+  setInterval(checkAutoBackupSchedule, 5 * 60 * 1000);
+  
+  // Also run a check 10 seconds post server start to process any missed backup
+  setTimeout(checkAutoBackupSchedule, 10000);
+
+  // Auto-backup configuration API routes
+
+  // 1. Get list of all auto-backups on disk
+  app.get("/api/admin/auto-backups", authenticate, (req: any, res) => {
+    if (req.user.role === 'student') return res.status(403).json({ error: "Forbidden" });
+    try {
+      const backupDir = path.join(process.cwd(), "autobackups");
+      if (!fs.existsSync(backupDir)) {
+        fs.mkdirSync(backupDir, { recursive: true });
+      }
+      const files = fs.readdirSync(backupDir)
+        .filter(f => f.startsWith("backup-auto-") && f.endsWith(".db"))
+        .map(f => {
+          const fp = path.join(backupDir, f);
+          const stat = fs.statSync(fp);
+          return {
+            filename: f,
+            size: stat.size,
+            createdAt: stat.mtime.toISOString()
+          };
+        });
+      
+      // Newest first
+      files.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      res.json(files);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 2. Download specific auto-backup file
+  app.get("/api/admin/auto-backups/:filename", authenticate, (req: any, res) => {
+    if (req.user.role === 'student') return res.status(403).json({ error: "Forbidden" });
+    const { filename } = req.params;
+    if (filename.includes("..") || filename.includes("/") || filename.includes("\\")) {
+      return res.status(400).json({ error: "Nom de fichier invalide" });
+    }
+    const filePath = path.join(process.cwd(), "autobackups", filename);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: "Fichier de sauvegarde introuvable" });
+    }
+    res.download(filePath, filename);
+  });
+
+  // 3. Delete specific auto-backup file
+  app.delete("/api/admin/auto-backups/:filename", authenticate, (req: any, res) => {
+    if (req.user.role === 'student') return res.status(403).json({ error: "Forbidden" });
+    const { filename } = req.params;
+    if (filename.includes("..") || filename.includes("/") || filename.includes("\\")) {
+      return res.status(400).json({ error: "Nom de fichier invalide" });
+    }
+    const filePath = path.join(process.cwd(), "autobackups", filename);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: "Fichier de sauvegarde introuvable" });
+    }
+    try {
+      fs.unlinkSync(filePath);
+      createLog(req.user.id, "DELETE_AUTO_BACKUP", `Suppression de la sauvegarde automatique : ${filename}`);
+      res.json({ success: true, message: "Sauvegarde automatique supprimée avec succès !" });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 4. Trigger manual creation of auto-backup
+  app.post("/api/admin/auto-backups/trigger", authenticate, async (req: any, res) => {
+    if (req.user.role === 'student') return res.status(403).json({ error: "Forbidden" });
+    try {
+      const backupDir = path.join(process.cwd(), "autobackups");
+      if (!fs.existsSync(backupDir)) {
+        fs.mkdirSync(backupDir, { recursive: true });
+      }
+
+      const now = new Date();
+      const YYYY = now.getFullYear();
+      const MM = String(now.getMonth() + 1).padStart(2, '0');
+      const DD = String(now.getDate()).padStart(2, '0');
+      const HH = String(now.getHours()).padStart(2, '0');
+      const mm = String(now.getMinutes()).padStart(2, '0');
+      const ss = String(now.getSeconds()).padStart(2, '0');
+      
+      const backupFileName = `backup-auto-${YYYY}-${MM}-${DD}_${HH}-${mm}-${ss}.db`;
+      const backupFilePath = path.join(backupDir, backupFileName);
+
+      db.pragma("optimize");
+      await db.backup(backupFilePath);
+      console.log(`[AUTO-BACKUP] Manually triggered auto backup: ${backupFileName}`);
+
+      db.prepare("UPDATE settings SET autoBackupLastRun = ? WHERE id = 1").run(now.toISOString());
+
+      // Standard rotations
+      const settings = db.prepare("SELECT autoBackupCount FROM settings WHERE id = 1").get() as any;
+      const countToKeep = settings?.autoBackupCount || 5;
+
+      const files = fs.readdirSync(backupDir)
+        .filter(f => f.startsWith("backup-auto-") && f.endsWith(".db"))
+        .map(f => {
+          const fp = path.join(backupDir, f);
+          return { name: f, path: fp, mtime: fs.statSync(fp).mtime.getTime() };
+        });
+
+      files.sort((a, b) => a.mtime - b.mtime);
+
+      while (files.length > countToKeep) {
+        const oldest = files.shift();
+        if (oldest) {
+          try { fs.unlinkSync(oldest.path); } catch (e) {}
+        }
+      }
+
+      createLog(req.user.id, "TRIGGER_AUTO_BACKUP", "Déclenchement manuel d'une sauvegarde automatique");
+      res.json({ success: true, message: "Sauvegarde générée avec succès dans l'espace automatique !" });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 5. Restore from specific auto-backup file
+  app.post("/api/admin/auto-backups/:filename/restore", authenticate, async (req: any, res) => {
+    if (req.user.role === 'student') return res.status(403).json({ error: "Forbidden" });
+    const { filename } = req.params;
+    if (filename.includes("..") || filename.includes("/") || filename.includes("\\")) {
+      return res.status(400).json({ error: "Nom de fichier invalide" });
+    }
+    const filePath = path.join(process.cwd(), "autobackups", filename);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: "Fichier de sauvegarde introuvable" });
+    }
+    try {
+      console.log(`[AUTO-RESTORE] Closing SQLite database connection for restoration : ${filename}`);
+      db.close();
+
+      const walFile = "eduqcm.db-wal";
+      const shmFile = "eduqcm.db-shm";
+      if (fs.existsSync(walFile)) { try { fs.unlinkSync(walFile); } catch (e) {} }
+      if (fs.existsSync(shmFile)) { try { fs.unlinkSync(shmFile); } catch (e) {} }
+
+      fs.copyFileSync(filePath, "eduqcm.db");
+      console.log("[AUTO-RESTORE] Database file overwritten successfully.");
+
+      db = new Database("eduqcm.db");
+      db.pragma("journal_mode = WAL");
+      db.pragma("foreign_keys = ON");
+      console.log("[AUTO-RESTORE] Database connection re-established.");
+
+      createLog(req.user.id, "RESTORE_DB", `Restauration effectuée depuis la sauvegarde automatique : ${filename}`);
+      res.json({ success: true, message: "La base de données a été restaurée avec succès à partir de la sauvegarde automatique !" });
+    } catch (err: any) {
+      console.error("[AUTO-RESTORE] Critical restore error:", err);
+      try {
+        db = new Database("eduqcm.db");
+        db.pragma("journal_mode = WAL");
+        db.pragma("foreign_keys = ON");
+      } catch (recoverErr) {
+        console.error("[AUTO-RESTORE] Failed to recover database connection:", recoverErr);
+      }
+      res.status(500).json({ error: "Échec de la restauration : " + err.message });
     }
   });
 
@@ -2129,6 +3802,70 @@ Instructions pour le feedback :
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
+  });
+
+  app.get("/api/admin/online-users", authenticate, (req: any, res) => {
+    const now = Date.now();
+    // Prune users inactive for over 2 minutes
+    for (const [id, user] of onlineUsers.entries()) {
+      if (now - user.lastActive > 120000) {
+        onlineUsers.delete(id);
+      }
+    }
+    res.json(Array.from(onlineUsers.values()));
+  });
+
+  app.get("/api/chat/messages", authenticate, (req: any, res) => {
+    const { channelType, groupId } = req.query;
+    if (!channelType) return res.status(400).json({ error: "channelType is required" });
+    
+    try {
+      let stmt;
+      let params: any[] = [];
+      
+      if (channelType === 'general') {
+        stmt = db.prepare("SELECT * FROM chat_messages WHERE channelType = 'general' ORDER BY id ASC LIMIT 100");
+      } else if (channelType === 'teachers') {
+        if (req.user.role !== 'teacher' && req.user.role !== 'admin') {
+          return res.status(403).json({ error: "Forbidden" });
+        }
+        stmt = db.prepare("SELECT * FROM chat_messages WHERE channelType = 'teachers' ORDER BY id ASC LIMIT 100");
+      } else if (channelType === 'group') {
+        if (!groupId) return res.status(400).json({ error: "groupId is required for group channel" });
+        
+        // Allow student of same group or teacher/admin
+        if (req.user.role === 'student' && req.user.groupId !== Number(groupId)) {
+          return res.status(403).json({ error: "Forbidden" });
+        }
+        
+        stmt = db.prepare("SELECT * FROM chat_messages WHERE channelType = 'group' AND groupId = ? ORDER BY id ASC LIMIT 100");
+        params = [groupId];
+      } else {
+        return res.status(400).json({ error: "Invalid channelType" });
+      }
+      
+      const messages = stmt.all(...params) as any[];
+      if (messages.length > 0) {
+        const messageIds = messages.map(m => m.id);
+        const placeholders = messageIds.map(() => "?").join(",");
+        const reactions = db.prepare(`SELECT * FROM chat_reactions WHERE messageId IN (${placeholders})`).all(...messageIds) as any[];
+        
+        // Group reactions under their messages
+        messages.forEach(msg => {
+          msg.reactions = reactions.filter(r => r.messageId === msg.id);
+        });
+      }
+      res.json(messages);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/admin/log-client-action", authenticate, (req: any, res) => {
+    const { action, details } = req.body;
+    if (!action) return res.status(400).json({ error: "Action is required" });
+    createLog(req.user.id, action.toUpperCase(), details || "Action enregistrée depuis le client.");
+    res.json({ success: true });
   });
 
   // --- Vite / Static ---

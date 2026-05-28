@@ -2,14 +2,15 @@ import React, { useState, useMemo } from 'react';
 import { motion } from 'motion/react';
 import { 
   Sparkles, BookOpen, CheckCircle2, BarChart3, Clock, Search, Star, ClipboardList, ArrowRight, Target, TrendingUp,
-  Award, Trophy, ShieldAlert, Zap, Flame, Lock
+  Award, Trophy, ShieldAlert, Zap, Flame, Lock, Bell
 } from 'lucide-react';
 import { cn, getExamTotalPoints, formatDuration } from '../../lib/utils';
-import { Exam, Result, Module, UserProfile } from '../../types';
+import { Exam, Result, Module, UserProfile, Notification, Group, Filiere } from '../../types';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
 import { EmptyState } from '../ui/EmptyState';
 import { ResultDetailsModal } from '../modals/ResultDetailsModal';
+import { DetailedNotificationCard } from '../DetailedNotificationCard';
 import { 
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area 
 } from 'recharts';
@@ -20,9 +21,13 @@ interface StudentDashboardProps {
   onStartExam: (exam: Exam) => void;
   user: UserProfile;
   modules: Module[];
+  notifications: Notification[];
+  groups?: Group[];
+  filieres?: Filiere[];
+  onRefresh?: () => void;
 }
 
-export const StudentDashboard = ({ exams, results, onStartExam, user, modules }: StudentDashboardProps) => {
+export const StudentDashboard = ({ exams, results, onStartExam, user, modules, notifications = [], groups = [], filieres = [], onRefresh = () => {} }: StudentDashboardProps) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedModuleId, setSelectedModuleId] = useState<number | null>(null);
   const [statusFilter, setStatusFilter] = useState<'all' | 'todo' | 'completed'>('all');
@@ -299,6 +304,40 @@ export const StudentDashboard = ({ exams, results, onStartExam, user, modules }:
               </div>
             </section>
           )}
+
+          {/* Class Announcements & Communications segment */}
+          <section className="space-y-6">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-10 h-10 rounded-xl bg-indigo-50 flex items-center justify-center shrink-0">
+                  <Bell className="w-5 h-5 text-indigo-600" />
+                </div>
+                <h3 className="text-xl font-black text-slate-900 tracking-tight">Annonces de classe & Communiqués</h3>
+              </div>
+              <span className="text-[10px] font-black uppercase text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-xl">
+                {notifications.length} {notifications.length > 1 ? 'annonces' : 'annonce'}
+              </span>
+            </div>
+            {notifications.length === 0 ? (
+              <div className="p-8 text-center bg-slate-50/60 rounded-[2rem] border-2 border-dashed border-slate-100">
+                <p className="text-xs font-black text-slate-400 uppercase tracking-widest leading-none">Aucun communiqué officiel</p>
+                <p className="text-[10px] text-slate-400 mt-2">Votre enseignant n'a publié aucune annonce pour l'instant.</p>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {notifications.map((notif) => (
+                  <DetailedNotificationCard 
+                    key={notif.id} 
+                    notification={notif} 
+                    user={user} 
+                    groups={groups}
+                    filieres={filieres}
+                    onRefresh={onRefresh} 
+                  />
+                ))}
+              </div>
+            )}
+          </section>
 
           <section className="space-y-8">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">

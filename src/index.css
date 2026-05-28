@@ -112,3 +112,165 @@
   @apply bg-indigo-200/80 rounded-full hover:bg-indigo-300 border-2 border-transparent bg-clip-padding;
 }
 
+/* --- High-Fidelity Vector Native Print Styles (@media print) --- */
+@media print {
+  /* Hide typical screen elements that shouldn't be printed */
+  aside, nav, header, footer, button, .no-print, 
+  .fixed, .absolute-controls, [role="tablist"], [role="navigation"],
+  .toast, .toaster, [id^="toast-"], .bg-slate-900\/60, .backdrop-blur-sm,
+  .modal-actions, .dialog-footer, .print-btn {
+    display: none !important;
+  }
+
+  /* Reset body and page settings for native printing */
+  html, body {
+    background-color: #ffffff !important;
+    color: #000000 !important;
+    font-size: 11pt !important;
+    font-family: "Times New Roman", Times, "Amiri", serif !important;
+    width: auto !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Specific structure isolation for printable containers */
+  #export-container,
+  #results-export-container,
+  #pv-export-container,
+  .pdf-export-content,
+  .pv-export-content,
+  .printable-area {
+    display: block !important;
+    visibility: visible !important;
+    position: static !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 10mm 15mm !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    box-shadow: none !important;
+    border: none !important;
+    left: auto !important;
+    top: auto !important;
+    box-sizing: border-box !important;
+  }
+
+  /* Try to isolate and show only the printable content when active */
+  body:has(#export-container, #results-export-container, #pv-export-container, .pdf-export-content, .pv-export-content) {
+    overflow: visible !important;
+  }
+  
+  body:has(#export-container, #results-export-container, #pv-export-container, .pdf-export-content, .pv-export-content) > :not(#export-container):not(#results-export-container):not(#pv-export-container):not(.pdf-export-content):not(.pv-export-content):not(#root) {
+    display: none !important;
+  }
+
+  body:has(#export-container, #results-export-container, #pv-export-container, .pdf-export-content, .pv-export-content) #root > :not(:has(#export-container, #results-export-container, #pv-export-container, .pdf-export-content, .pv-export-content)) {
+    display: none !important;
+  }
+
+  /* Page size setup */
+  @page {
+    size: A4 portrait;
+    margin: 15mm 15mm 15mm 15mm;
+  }
+
+  /* Adjust for PV Export which is landscape (A4 landscape) */
+  @page pv-landscape-page {
+    size: A4 landscape;
+    margin: 12mm 15mm 12mm 15mm;
+  }
+
+  #pv-export-container, .pv-export-content {
+    page: pv-landscape-page;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  /* --- Pagination rules mapping --- */
+  
+  /* Prevent tables or grids from splitting awkwardly across sheets */
+  table, tr, td, th {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  thead {
+    display: table-header-group !important;
+  }
+
+  tr {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    page-break-after: auto !important;
+    break-after: auto !important;
+  }
+
+  /* Prevent question blocks and individual student result cards from splitting over two physical pages */
+  .question-block,
+  .student-detail-card,
+  .participant-card,
+  .card,
+  .candidate-info-wrap,
+  .metadata-table,
+  .header-table,
+  .qr-code-verification-wrap,
+  .correction-summary {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    margin-bottom: 20px !important;
+    display: block !important;
+  }
+
+  /* Prevent orphan headers/titles */
+  h1, h2, h3, h4, .section-header {
+    page-break-after: avoid !important;
+    break-after: avoid !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  /* Allow lists to break gracefully but keep individual list items unified */
+  ul, ol {
+    page-break-inside: auto !important;
+    break-inside: auto !important;
+  }
+
+  li {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  /* Maintain black text and clean background borders for beautiful, crisp native prints */
+  * {
+    color: #000000 !important;
+    text-shadow: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    border-color: #000000 !important;
+  }
+
+  /* Keep table dividers visible when color-adjust is exact */
+  thead th, td, th {
+    border-color: #000000 !important;
+    border-width: 1px !important;
+  }
+
+  /* Extra spacing for print headers and block styles */
+  .section-header {
+    background-color: #f3f4f6 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    border: 1.5px solid #000000 !important;
+    padding: 8px 12px !important;
+    margin-top: 15px !important;
+    margin-bottom: 12px !important;
+    font-weight: bold !important;
+  }
+}
+
+

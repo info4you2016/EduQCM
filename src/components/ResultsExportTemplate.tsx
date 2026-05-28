@@ -1,6 +1,6 @@
 import React from 'react';
 import { Exam, Result, Module, OrganizationSettings } from '../types';
-import { formatScore, formatPercent } from '../lib/utils';
+import { formatScore, formatPercent, formatDuration, getLineImageUrl } from '../lib/utils';
 
 interface ResultsExportTemplateProps {
   exam: Exam;
@@ -21,6 +21,19 @@ export const ResultsExportTemplate = React.forwardRef<HTMLDivElement, ResultsExp
     const replaceVariables = (text: string) => {
       if (!text) return '';
       return text
+        .replace(/{{TITRE}}/g, exam.title || '')
+        .replace(/{{MODULE}}/g, module.name || '')
+        .replace(/{{DATE}}/g, exam.scheduledAt ? new Date(exam.scheduledAt).toLocaleDateString('fr-FR') : new Date().toLocaleDateString('fr-FR'))
+        .replace(/{{GROUPE}}/g, groupName || '')
+        .replace(/{{DUREE}}/g, formatDuration(exam.durationMinutes))
+        .replace(/{{TYPE}}/g, exam.type === 'controle-continu' ? 'CC' : 'EFM')
+        .replace(/{{FILIERE}}/g, filiereName || '')
+        .replace(/{{NIVEAU}}/g, filiereLevel || '')
+        .replace(/{{ETABLISSEMENT}}/g, settings?.institutionName || '')
+        .replace(/{{DIRECTION}}/g, settings?.regionalDirection || '')
+        .replace(/{{REGION}}/g, settings?.regionName || '')
+        .replace(/{{ANNEE_ACAD}}/g, settings?.academicYear || '')
+        .replace(/{{CODE_ORG}}/g, settings?.orgSubName || '')
         .replace(/{{ORG_AR}}/g, settings?.orgNameArabic || '')
         .replace(/{{ORG_FR}}/g, settings?.orgNameFrench || '');
     };
@@ -74,7 +87,7 @@ export const ResultsExportTemplate = React.forwardRef<HTMLDivElement, ResultsExp
             <table className="header-table" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: '15px', border: '1.5px solid #000' }}>
               <tbody>
                 <tr>
-                  {settings.headerColumns.map((col) => (
+                   {settings.headerColumns.map((col) => (
                     <td 
                       key={col.id} 
                       style={{ 
@@ -83,7 +96,10 @@ export const ResultsExportTemplate = React.forwardRef<HTMLDivElement, ResultsExp
                         textAlign: 'center', 
                         verticalAlign: 'middle', 
                         border: '1px solid #000',
-                        borderRight: col.borderRight ? '1.5px solid #000' : '1px solid #000'
+                        borderLeft: col.borderLeft ? '1.5px solid #000' : '1px solid #000',
+                        borderRight: col.borderRight ? '1.5px solid #000' : '1px solid #000',
+                        backgroundColor: col.bgColor || 'transparent',
+                        color: col.textColor || 'inherit'
                       }}
                     >
                       <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -102,7 +118,7 @@ export const ResultsExportTemplate = React.forwardRef<HTMLDivElement, ResultsExp
                           >
                             {line.type === 'image' ? (
                               <img 
-                                src={line.imageUrl} 
+                                src={getLineImageUrl(line, settings)} 
                                 alt="Logo" 
                                 style={{ 
                                   width: line.imageWidth ? `${line.imageWidth}pt` : '40pt',
@@ -119,7 +135,8 @@ export const ResultsExportTemplate = React.forwardRef<HTMLDivElement, ResultsExp
                                   fontStyle: line.isItalic ? 'italic' : 'normal',
                                   fontFamily: line.fontFamily || 'inherit',
                                   direction: isArabic(line.text || '') ? 'rtl' : 'ltr',
-                                  whiteSpace: 'nowrap'
+                                  whiteSpace: 'nowrap',
+                                  color: col.textColor || 'inherit'
                                 }}>
                                   {replaceVariables(line.text)}
                                 </p>

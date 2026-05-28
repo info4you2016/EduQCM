@@ -392,12 +392,8 @@ export const AuditLogsView = () => {
                     </td>
                     <td className="px-6 py-5">
                       <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-2xl bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-600 font-black text-sm group-hover:bg-indigo-600 group-hover:text-white transition-all duration-500 overflow-hidden relative shadow-sm">
-                           {log.userEmail ? (
-                             <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${log.userEmail}`} alt="avatar" />
-                           ) : (
-                             log.userName?.[0] || 'S'
-                           )}
+                        <div className="w-10 h-10 rounded-2xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 font-extrabold text-sm group-hover:bg-indigo-600 group-hover:text-white transition-all duration-500 overflow-hidden relative shadow-sm">
+                           {log.userName ? log.userName[0].toUpperCase() : (log.userEmail ? log.userEmail[0].toUpperCase() : 'S')}
                         </div>
                         <div className="flex flex-col">
                           <p className="text-sm font-black text-slate-900 uppercase tracking-tight">{log.userName || 'Système'}</p>

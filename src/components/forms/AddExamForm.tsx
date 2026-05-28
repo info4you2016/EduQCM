@@ -903,9 +903,9 @@ export const AddExamForm = ({ modules, onComplete, user, initialData }: AddExamF
               <input type="checkbox" checked={disableCopyPaste} onChange={(e) => setDisableCopyPaste(e.target.checked)} className="w-5 h-5 text-rose-600 rounded-lg border-2 border-slate-300 focus:ring-rose-500" />
               <div className="flex flex-col">
                 <span className="text-sm font-bold text-slate-700 flex items-center gap-2">
-                  <ShieldAlert className="w-4 h-4 text-rose-500" /> Anti Copier-Coller
+                  <ShieldAlert className="w-4 h-4 text-rose-500" /> Verrouillage de l'appareil ("Safe Exam Browser Mode")
                 </span>
-                <span className="text-[10px] text-slate-400 font-medium">Sécurité renforcée contre la triche</span>
+                <span className="text-[10px] text-slate-400 font-medium">Plein écran obligatoire, blocage du copier-coller, alertes d'abandon d'onglet et fermeture automatique</span>
               </div>
             </label>
           </div>

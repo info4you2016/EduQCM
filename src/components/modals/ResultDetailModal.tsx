@@ -31,15 +31,15 @@ export const ResultDetailModal = ({ result, exam, onClose }: ResultDetailModalPr
         <div ref={topRef} />
         
         {/* Header Summary */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
            <Card className="p-6 bg-slate-50 border-none flex flex-col items-center justify-center gap-3">
               <div className="w-12 h-12 rounded-2xl bg-white border border-slate-100 flex items-center justify-center text-indigo-600 shadow-sm">
                 <User className="w-6 h-6" />
               </div>
               <div className="text-center">
                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Étudiant</p>
-                <h4 className="font-black text-slate-900 text-lg uppercase tracking-tight">{result.studentName}</h4>
-                <p className="text-[10px] font-bold text-slate-400">{result.studentEmail}</p>
+                <h4 className="font-black text-slate-900 text-sm uppercase tracking-tight truncate max-w-[150px]">{result.studentName}</h4>
+                <p className="text-[10px] font-bold text-slate-400 truncate max-w-[150px]">{result.studentEmail}</p>
               </div>
            </Card>
 
@@ -49,8 +49,8 @@ export const ResultDetailModal = ({ result, exam, onClose }: ResultDetailModalPr
               </div>
               <div className="text-center">
                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Examen</p>
-                <h4 className="font-black text-slate-900 text-lg uppercase tracking-tight">{exam.title}</h4>
-                <p className="text-[10px] font-bold text-slate-400 italic">Complété le {new Date(result.completedAt).toLocaleDateString()}</p>
+                <h4 className="font-black text-slate-900 text-sm uppercase tracking-tight truncate max-w-[150px]">{exam.title}</h4>
+                <p className="text-[10px] font-bold text-slate-400 italic">le {new Date(result.completedAt).toLocaleDateString()}</p>
               </div>
            </Card>
 
@@ -61,9 +61,107 @@ export const ResultDetailModal = ({ result, exam, onClose }: ResultDetailModalPr
               <div className="text-4xl font-black">{percentage}%</div>
               <div className="flex flex-col items-center">
                 <p className={cn("text-[10px] font-black uppercase tracking-widest opacity-60 mb-1")}>Note Finale</p>
-                <h4 className="font-black text-xl">{formatScore(result.score)} / {result.totalPoints}</h4>
+                <h4 className="font-black text-sm">{formatScore(result.score)} / {result.totalPoints}</h4>
               </div>
            </Card>
+
+           <Card className={cn(
+             "p-6 border-none flex flex-col items-center justify-center gap-3",
+             (result.integrityScore !== undefined ? result.integrityScore : 100) >= 80 ? "bg-emerald-50 text-emerald-700" : (result.integrityScore !== undefined ? result.integrityScore : 100) >= 50 ? "bg-amber-50 text-amber-700" : "bg-rose-50 text-rose-700"
+           )}>
+              <div className="text-4xl font-black">{result.integrityScore !== undefined ? result.integrityScore : 100}%</div>
+              <div className="flex flex-col items-center">
+                <p className="text-[10px] font-black uppercase tracking-widest opacity-60 mb-1">Intégrité Exam</p>
+                <h4 className="font-black text-sm text-center">{result.tabExitCount || 0} sortie(s) | {result.fullscreenExitsCount || 0} PE</h4>
+              </div>
+           </Card>
+        </div>
+
+        {/* Audit Trail & Safe Exam Browser Monitor Logging */}
+        <div className="p-8 bg-slate-50/50 rounded-[2.5rem] border-2 border-slate-100 space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-2.5 h-6 bg-rose-500 rounded-full" />
+              <div>
+                <h3 className="text-base font-black text-slate-900 tracking-tight">Journal d'Intégrité de l'Étudiant</h3>
+                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Activité enregistrée par le système anti-triche</p>
+              </div>
+            </div>
+            <div className={cn(
+              "px-4 py-1.5 rounded-2xl text-[10px] font-black uppercase tracking-widest border self-start sm:self-auto",
+              (result.integrityScore !== undefined ? result.integrityScore : 100) >= 90
+                ? "bg-emerald-100 border-emerald-200 text-emerald-800"
+                : (result.integrityScore !== undefined ? result.integrityScore : 100) >= 70
+                  ? "bg-amber-100 border-amber-200 text-amber-800"
+                  : "bg-rose-100 border-rose-200 text-rose-800"
+            )}>
+              {(result.integrityScore !== undefined ? result.integrityScore : 100) >= 90 
+                ? "Intégrité Excellente" 
+                : (result.integrityScore !== undefined ? result.integrityScore : 100) >= 70 
+                  ? "Comportement Suspect" 
+                  : "Fraude Haute Probabilité"}
+            </div>
+          </div>
+
+          {/* Audit Metrics */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pb-2">
+            <div className="p-4 bg-white rounded-2xl border border-slate-100 flex flex-col items-center">
+              <span className="text-2xl font-black text-slate-800">{result.tabExitCount || 0}</span>
+              <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-1">Sorties d'Onglet</span>
+            </div>
+            <div className="p-4 bg-white rounded-2xl border border-slate-100 flex flex-col items-center">
+              <span className="text-2xl font-black text-slate-800">{result.fullscreenExitsCount || 0}</span>
+              <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-1">Quittés Plein Écran</span>
+            </div>
+            <div className="p-4 bg-white rounded-2xl border border-slate-100 flex flex-col items-center">
+              <span className="text-2xl font-black text-slate-800">
+                {result.auditTrail ? result.auditTrail.filter(e => e.type.startsWith('blocked-')).length : 0}
+              </span>
+              <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-1">Copiés/Bloqués</span>
+            </div>
+            <div className="p-4 bg-white rounded-2xl border border-slate-100 flex flex-col items-center">
+              <span className="text-2xl font-black text-slate-800">
+                {result.auditTrail ? result.auditTrail.filter(e => e.type === 'devtools-blocked' || e.type === 'shortcut-blocked').length : 0}
+              </span>
+              <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mt-1">DevTools / Raccourcis</span>
+            </div>
+          </div>
+
+          {/* Visual Timed Timeline */}
+          <div className="space-y-3">
+            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Chronologie complète des événements d'examen</p>
+            {result.auditTrail && result.auditTrail.length > 0 ? (
+              <div className="max-h-[220px] overflow-y-auto pr-2 custom-scrollbar space-y-2 border border-slate-100 bg-white p-4 rounded-3xl">
+                {result.auditTrail.map((log, index) => {
+                  const isCritical = log.type === 'fullscreen-exit' || log.type === 'devtools-blocked' || log.type === 'tab-exit';
+                  return (
+                    <div key={index} className="flex items-start gap-4 py-2.5 px-3 rounded-xl hover:bg-slate-50 transition-colors border-b border-dashed border-slate-100 last:border-0">
+                      <div className="min-w-[75px] font-mono text-[9px] font-black text-slate-400 mt-1">
+                        {new Date(log.timestamp).toLocaleTimeString('fr-FR')}
+                      </div>
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className={cn(
+                            "px-2 py-0.5 rounded-md text-[8px] font-black uppercase tracking-wider",
+                            isCritical 
+                              ? "bg-rose-50 border border-rose-100 text-rose-600" 
+                              : "bg-amber-50 border border-amber-100 text-amber-700"
+                          )}>
+                            {log.type}
+                          </span>
+                        </div>
+                        <p className="text-xs font-bold text-slate-600 mt-1">{log.details}</p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="py-8 px-6 bg-white border border-slate-100 rounded-3xl text-center">
+                <p className="text-xs font-bold text-emerald-600">Aucune infraction ni événement de sécurité enregistré. Intégrité parfaite de 100%.</p>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Question Indicators (Quick Nav) - Hide on Print */}

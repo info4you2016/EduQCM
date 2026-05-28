@@ -21,7 +21,7 @@ import {
 } from "docx";
 import { saveAs } from "file-saver";
 import { Exam, Module, Question, OrganizationSettings } from "../types";
-import { formatDuration } from "./utils";
+import { formatDuration, getLineImageUrl } from "./utils";
 
 async function fetchImageAsBuffer(url: string): Promise<Uint8Array | null> {
   try {
@@ -44,7 +44,9 @@ export const exportExamToWord = async (
   showAnswers: boolean = false,
   settings?: OrganizationSettings | null,
   filiereLevel?: string,
-  teacherName?: string
+  teacherName?: string,
+  paperSaver: boolean = false,
+  qcmDoubleColumn: boolean = false
 ) => {
   const orgName = settings?.orgName || 'OFPPT';
   const orgNameArabic = settings?.orgNameArabic || 'مكتب التكوين المهني وإنعاش الشغل';
@@ -66,13 +68,15 @@ export const exportExamToWord = async (
       .replace(/{{DUREE}}/g, formatDuration(exam.durationMinutes))
       .replace(/{{TYPE}}/g, exam.type === 'controle-continu' ? 'CC' : 'EFM')
       .replace(/{{FILIERE}}/g, filiereName || '')
+      .replace(/{{NIVEAU}}/g, filiereLevel || '')
       .replace(/{{ETABLISSEMENT}}/g, settings?.institutionName || 'INSTITUTION')
       .replace(/{{DIRECTION}}/g, settings?.regionalDirection || 'DIRECTION RÉGIONALE')
       .replace(/{{REGION}}/g, settings?.regionName || 'REGION')
       .replace(/{{ANNEE_ACAD}}/g, settings?.academicYear || '2024/2025')
       .replace(/{{CODE_ORG}}/g, settings?.orgSubName || 'ORG')
       .replace(/{{ORG_AR}}/g, settings?.orgNameArabic || 'ORG AR')
-      .replace(/{{ORG_FR}}/g, settings?.orgNameFrench || 'ORG FR');
+      .replace(/{{ORG_FR}}/g, settings?.orgNameFrench || 'ORG FR')
+      .replace(/\u00A0/g, ' ');
   };
 
   const footerTextRaw = settings?.footerText || `${orgName} / ${orgSubName} / ${module.code}`;
@@ -94,10 +98,13 @@ export const exportExamToWord = async (
   if (settings?.headerColumns) {
     for (const col of settings.headerColumns) {
       for (const line of col.lines) {
-        if (line.type === 'image' && line.imageUrl) {
-          if (!colLogoBuffers.has(line.imageUrl)) {
-            const buffer = await fetchImageAsBuffer(line.imageUrl);
-            colLogoBuffers.set(line.imageUrl, buffer);
+        if (line.type === 'image') {
+          const resolvedUrl = getLineImageUrl(line, settings);
+          if (resolvedUrl) {
+            if (!colLogoBuffers.has(resolvedUrl)) {
+              const buffer = await fetchImageAsBuffer(resolvedUrl);
+              colLogoBuffers.set(resolvedUrl, buffer);
+            }
           }
         }
       }
@@ -108,10 +115,13 @@ export const exportExamToWord = async (
   if (settings?.footerColumns) {
     for (const col of settings.footerColumns) {
       for (const line of col.lines) {
-        if (line.type === 'image' && line.imageUrl) {
-          if (!footerColLogoBuffers.has(line.imageUrl)) {
-            const buffer = await fetchImageAsBuffer(line.imageUrl);
-            footerColLogoBuffers.set(line.imageUrl, buffer);
+        if (line.type === 'image') {
+          const resolvedUrl = getLineImageUrl(line, settings);
+          if (resolvedUrl) {
+            if (!footerColLogoBuffers.has(resolvedUrl)) {
+              const buffer = await fetchImageAsBuffer(resolvedUrl);
+              footerColLogoBuffers.set(resolvedUrl, buffer);
+            }
           }
         }
       }
@@ -175,7 +185,13 @@ export const exportExamToWord = async (
     },
     sections: [
       {
-        properties: {},
+        properties: {
+          page: {
+            margin: paperSaver
+              ? { top: 720, bottom: 720, left: 720, right: 720 }
+              : { top: 1440, bottom: 1440, left: 1440, right: 1440 }
+          }
+        },
         headers: {
           default: new Header({
             children: settings?.showWatermark && settings.watermarkText ? [
@@ -227,7 +243,7 @@ export const exportExamToWord = async (
                         },
                         children: col.lines.map((line, idx) => {
                           if (line.type === 'image') {
-                            const buffer = footerColLogoBuffers.get(line.imageUrl || '');
+                            const buffer = footerColLogoBuffers.get(getLineImageUrl(line, settings) || '');
                             const img = createLogoImage(buffer || null, line.imageWidth || 30, line.imageHeight || 30);
                             return new Paragraph({
                               alignment: line.alignment === 'right' ? AlignmentType.RIGHT : 
@@ -342,6 +358,33 @@ export const exportExamToWord = async (
                       }))
                     }))
                   })
+                ] : []),
+                ...(!(settings?.showFooter && (settings.showFooterText ?? true)) && !(settings?.showFooter && settings?.footerColumns && settings.footerColumns.length > 0) ? [
+                  new Paragraph({
+                    alignment: AlignmentType.CENTER,
+                    children: [
+                      new TextRun({
+                        text: "Page ",
+                        size: (settings?.footerFontSize || 9) * 2,
+                        font: settings?.footerFontFamily ? settings.footerFontFamily.split(',')[0].replace(/"/g, '') : undefined,
+                      }),
+                      new TextRun({
+                        children: [PageNumber.CURRENT],
+                        size: (settings?.footerFontSize || 9) * 2,
+                        font: settings?.footerFontFamily ? settings.footerFontFamily.split(',')[0].replace(/"/g, '') : undefined,
+                      }),
+                      new TextRun({
+                        text: " sur ",
+                        size: (settings?.footerFontSize || 9) * 2,
+                        font: settings?.footerFontFamily ? settings.footerFontFamily.split(',')[0].replace(/"/g, '') : undefined,
+                      }),
+                      new TextRun({
+                        children: [PageNumber.TOTAL_PAGES],
+                        size: (settings?.footerFontSize || 9) * 2,
+                        font: settings?.footerFontFamily ? settings.footerFontFamily.split(',')[0].replace(/"/g, '') : undefined,
+                      }),
+                    ],
+                  })
                 ] : [])
               ])
             ],
@@ -364,7 +407,7 @@ export const exportExamToWord = async (
                       },
                       children: col.lines.map((line, idx) => {
                         if (line.type === 'image') {
-                          const buffer = colLogoBuffers.get(line.imageUrl || '');
+                          const buffer = colLogoBuffers.get(getLineImageUrl(line, settings) || '');
                           const img = createLogoImage(buffer || null, line.imageWidth || 40, line.imageHeight || 40);
                           return new Paragraph({
                             alignment: line.alignment === 'right' ? AlignmentType.RIGHT : 
@@ -505,7 +548,7 @@ export const exportExamToWord = async (
               }),
             ],
           }),
-          new Paragraph({ text: "", spacing: { after: 200 } }),
+          new Paragraph({ text: "", spacing: { after: 120 } }),
 
           // Metadata Table
           new Table({
@@ -515,15 +558,15 @@ export const exportExamToWord = async (
                 children: [
                   new TableCell({
                     width: { size: 33, type: WidthType.PERCENTAGE },
-                    children: [new Paragraph({ children: [new TextRun({ text: "Filière : ", bold: true }), new TextRun({ text: filiereName })] })],
+                    children: [new Paragraph({ spacing: { before: 60, after: 60, line: 240 }, children: [new TextRun({ text: "Filière : ", bold: true }), new TextRun({ text: filiereName })] })],
                   }),
                   new TableCell({
                     width: { size: 33, type: WidthType.PERCENTAGE },
-                    children: [new Paragraph({ children: [new TextRun({ text: "Niveau : ", bold: true }), new TextRun({ text: filiereLevel || "TS / T / B" })] })],
+                    children: [new Paragraph({ spacing: { before: 60, after: 60, line: 240 }, children: [new TextRun({ text: "Niveau : ", bold: true }), new TextRun({ text: filiereLevel || "TS / T / B" })] })],
                   }),
                   new TableCell({
                     width: { size: 34, type: WidthType.PERCENTAGE },
-                    children: [new Paragraph({ children: [new TextRun({ text: "Année de formation : ", bold: true }), new TextRun({ text: academicYear })] })],
+                    children: [new Paragraph({ spacing: { before: 60, after: 60, line: 240 }, children: [new TextRun({ text: "Année de formation : ", bold: true }), new TextRun({ text: academicYear })] })],
                   }),
                 ],
               }),
@@ -531,12 +574,12 @@ export const exportExamToWord = async (
                 children: [
                   new TableCell({
                     width: { size: 33, type: WidthType.PERCENTAGE },
-                    children: [new Paragraph({ children: [new TextRun({ text: "Numéro du module : ", bold: true }), new TextRun({ text: String(module.code) })] })],
+                    children: [new Paragraph({ spacing: { before: 60, after: 60, line: 240 }, children: [new TextRun({ text: "Numéro du module : ", bold: true }), new TextRun({ text: String(module.code) })] })],
                   }),
                   new TableCell({
                     width: { size: 67, type: WidthType.PERCENTAGE },
                     columnSpan: 2,
-                    children: [new Paragraph({ children: [new TextRun({ text: "Intitulé du module : ", bold: true }), new TextRun({ text: module.name })] })],
+                    children: [new Paragraph({ spacing: { before: 60, after: 60, line: 240 }, children: [new TextRun({ text: "Intitulé du module : ", bold: true }), new TextRun({ text: module.name })] })],
                   }),
                 ],
               }),
@@ -544,15 +587,15 @@ export const exportExamToWord = async (
                 children: [
                   new TableCell({
                     width: { size: 33, type: WidthType.PERCENTAGE },
-                    children: [new Paragraph({ children: [new TextRun({ text: "Horaire : ", bold: true }), new TextRun({ text: formatDuration(exam.durationMinutes) })] })],
+                    children: [new Paragraph({ spacing: { before: 60, after: 60, line: 240 }, children: [new TextRun({ text: "Horaire : ", bold: true }), new TextRun({ text: formatDuration(exam.durationMinutes) })] })],
                   }),
                   new TableCell({
                     width: { size: 33, type: WidthType.PERCENTAGE },
-                    children: [new Paragraph({ children: [new TextRun({ text: "Date : ", bold: true }), new TextRun({ text: new Date().toLocaleDateString('fr-FR') })] })],
+                    children: [new Paragraph({ spacing: { before: 60, after: 60, line: 240 }, children: [new TextRun({ text: "Date : ", bold: true }), new TextRun({ text: new Date().toLocaleDateString('fr-FR') })] })],
                   }),
                   new TableCell({
                     width: { size: 34, type: WidthType.PERCENTAGE },
-                    children: [new Paragraph({ children: [new TextRun({ text: "Barème : ", bold: true }), new TextRun({ text: `/ ${Number.isInteger(totalPoints) ? totalPoints : totalPoints.toFixed(2)} Pts` })] })],
+                    children: [new Paragraph({ spacing: { before: 60, after: 60, line: 240 }, children: [new TextRun({ text: "Barème : ", bold: true }), new TextRun({ text: `/ ${Number.isInteger(totalPoints) ? totalPoints : totalPoints.toFixed(2)} Pts` })] })],
                   }),
                 ],
               }),
@@ -569,7 +612,7 @@ export const exportExamToWord = async (
                 underline: { type: "single" }
               }),
             ],
-            spacing: { before: 400, after: 400 }
+            spacing: { before: 200, after: 200 }
           }),
 
 
@@ -619,7 +662,7 @@ export const exportExamToWord = async (
             ],
           }),
 
-          new Paragraph({ text: "", spacing: { after: 400 } }),
+          new Paragraph({ text: "", spacing: { after: 120 } }),
 
           ...(() => {
             const groupedQuestions = exam.questions.reduce((acc, q, idx) => {
@@ -664,7 +707,7 @@ export const exportExamToWord = async (
                     }),
                   ],
                   shading: { fill: "f3f4f6" },
-                  spacing: { before: 400, after: 200 },
+                  spacing: { before: 160, after: 80, line: 240 },
                 }),
                 ...(type === 'fill-in-the-blanks' ? [
                   new Paragraph({
@@ -676,7 +719,7 @@ export const exportExamToWord = async (
                         underline: { type: "single" }
                       }),
                     ],
-                    spacing: { before: 200, after: 200 },
+                    spacing: { before: 80, after: 80, line: 240 },
                   }),
                 ] : []),
                 ...(() => {
@@ -772,28 +815,62 @@ export const exportExamToWord = async (
                       })
                     ];
                   }
-                  return groupedQuestions[type].flatMap(({ q, originalIdx }) => renderQuestionDocx(q, originalIdx, showAnswers, questionImageBuffers));
+                  if (type === 'multiple-choice' && qcmDoubleColumn) {
+                    const qcmQuestions = groupedQuestions[type];
+                    const tableRows = [];
+                    for (let i = 0; i < qcmQuestions.length; i += 2) {
+                      const pair1 = qcmQuestions[i];
+                      const pair2 = qcmQuestions[i + 1];
+                      
+                      const leftElements = renderQuestionDocx(pair1.q, pair1.originalIdx, showAnswers, questionImageBuffers, paperSaver, true);
+                      const rightElements = pair2 
+                        ? renderQuestionDocx(pair2.q, pair2.originalIdx, showAnswers, questionImageBuffers, paperSaver, true)
+                        : [];
+                      
+                      const noBorder = { style: BorderStyle.NONE, size: 0, color: "auto" };
+                      const borders = {
+                        top: noBorder, bottom: noBorder, left: noBorder, right: noBorder
+                      };
+                      
+                      tableRows.push(
+                        new TableRow({
+                          children: [
+                            new TableCell({
+                              width: { size: 50, type: WidthType.PERCENTAGE },
+                              borders,
+                              children: leftElements
+                            }),
+                            new TableCell({
+                              width: { size: 50, type: WidthType.PERCENTAGE },
+                              borders,
+                              children: rightElements
+                            })
+                          ]
+                        })
+                      );
+                    }
+                    return [
+                      new Table({
+                        width: { size: 100, type: WidthType.PERCENTAGE },
+                        rows: tableRows
+                      })
+                    ];
+                  }
+                  return groupedQuestions[type].flatMap(({ q, originalIdx }) => renderQuestionDocx(q, originalIdx, showAnswers, questionImageBuffers, paperSaver, false));
                 })()
               ];
             });
           })(),
 
-          new Paragraph({
-            children: [
-              new TextRun({ text: "Elaboré par le Formateur :", bold: true, size: 22 }),
-            ],
-            spacing: { before: 800, after: 200 }
-          }),
-
           // Optional Correction Grid
           ...(showAnswers ? [
-            new Paragraph({ text: "", spacing: { before: 800 } }),
+            new Paragraph({ text: "", spacing: { before: paperSaver ? 200 : 400 } }),
             new Paragraph({
               alignment: AlignmentType.CENTER,
               children: [
-                new TextRun({ text: "GRILLE DE RÉPONSES (CORRIGÉ)", bold: true, underline: {}, size: 24 }),
+                new TextRun({ text: "GRILLE DE RÉPONSES (CORRIGÉ)", bold: true, underline: {}, size: paperSaver ? 20 : 24 }),
               ],
-              spacing: { after: 200 },
+              spacing: { after: paperSaver ? 60 : 120, line: paperSaver ? 180 : 240 },
             }),
             new Table({
               width: { size: 100, type: WidthType.PERCENTAGE },
@@ -820,7 +897,7 @@ export const exportExamToWord = async (
   saveAs(blob, `${exam.title.replace(/\s+/g, '_')}_${showAnswers ? 'Corrige' : 'Examen'}.docx`);
 };
 
-function renderQuestionDocx(q: Question, index: number, showAnswers: boolean, imageBuffers: Map<string, Uint8Array | null>): (Paragraph | Table)[] {
+function renderQuestionDocx(q: Question, index: number, showAnswers: boolean, imageBuffers: Map<string, Uint8Array | null>, paperSaver: boolean = false, singleColOptions: boolean = false): (Paragraph | Table)[] {
   const elements: (Paragraph | Table)[] = [];
   const rtl = isArabic(q.text);
 
@@ -836,62 +913,40 @@ function renderQuestionDocx(q: Question, index: number, showAnswers: boolean, im
           headerChildren.push(new TextRun({ 
             text: ` [ ${q.correctAnswers[i]} ] `, 
             bold: true, 
-            color: "059669" 
+            color: "059669",
+            size: paperSaver ? 14 : 20
           }));
         } else {
-          headerChildren.push(new TextRun({ text: " ...................... ", bold: true }));
+          headerChildren.push(new TextRun({ text: paperSaver ? " ......... " : " ...................... ", bold: true }));
         }
       }
     });
-    headerChildren.push(new TextRun({ text: ` (${Number.isInteger(q.points) ? q.points : q.points.toFixed(2)} pts)`, italics: true, size: 18 }));
+    headerChildren.push(new TextRun({ text: ` (${Number.isInteger(q.points) ? q.points : q.points.toFixed(2)} pts)`, italics: true, size: paperSaver ? 14 : 18 }));
     
     elements.push(
       new Paragraph({
         alignment: rtl ? AlignmentType.RIGHT : AlignmentType.LEFT,
         bidirectional: rtl,
-        spacing: { before: 300, after: 100 },
+        spacing: { before: paperSaver ? 80 : 160, after: paperSaver ? 30 : 60, line: paperSaver ? 200 : 240 },
         children: headerChildren,
       })
     );
   } else {
-    // For other questions, use a table to handle multi-line content correctly next to the index
-    const colAWidth = 500; // DXA for "1. "
-    const colCWidth = 800; // DXA for "(pts)"
+    // For other questions, render directly as standard paragraphs without using tables
+    const prefixRuns = [
+      new TextRun({ text: `${index + 1}. `, bold: true })
+    ];
+    const suffixRuns = [
+      new TextRun({ text: ` (${Number.isInteger(q.points) ? q.points : q.points.toFixed(2)} pts)`, italics: true, size: paperSaver ? 13 : 16 })
+    ];
 
-    const questionContentElements = htmlToDocxElements(q.text, { size: 22 }, imageBuffers);
+    const questionContentElements = htmlToDocxElements(
+      q.text, 
+      { size: paperSaver ? 18 : 22, prefixRuns, suffixRuns }, 
+      imageBuffers
+    );
 
-    elements.push(new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
-      borders: {
-        top: { style: BorderStyle.NONE },
-        bottom: { style: BorderStyle.NONE },
-        left: { style: BorderStyle.NONE },
-        right: { style: BorderStyle.NONE },
-        insideHorizontal: { style: BorderStyle.NONE },
-        insideVertical: { style: BorderStyle.NONE },
-      },
-      rows: [
-        new TableRow({
-          children: [
-            new TableCell({
-              width: { size: colAWidth, type: WidthType.DXA },
-              children: [new Paragraph({ children: [new TextRun({ text: `${index + 1}. `, bold: true })] })],
-            }),
-            new TableCell({
-              width: { size: 100, type: WidthType.PERCENTAGE },
-              children: questionContentElements,
-            }),
-            new TableCell({
-              width: { size: colCWidth, type: WidthType.DXA },
-              children: [new Paragraph({ 
-                alignment: AlignmentType.RIGHT,
-                children: [new TextRun({ text: `(${Number.isInteger(q.points) ? q.points : q.points.toFixed(2)} pts)`, italics: true, size: 16 })] 
-              })],
-            }),
-          ]
-        })
-      ]
-    }));
+    elements.push(...questionContentElements);
   }
 
   if (q.type === 'multiple-choice') {
@@ -904,80 +959,137 @@ function renderQuestionDocx(q: Question, index: number, showAnswers: boolean, im
 
     const tableRows = [];
     
-    for (let i = 0; i < optionsWithOrig.length; i += 2) {
-      const opt1 = optionsWithOrig[i];
-      const opt2 = optionsWithOrig[i + 1];
-      const opt1Rtl = isArabic(opt1.text);
-      
-      const noBorder = { style: BorderStyle.NONE, size: 0, color: "auto" };
-      const borders = {
-        top: noBorder, bottom: noBorder, left: noBorder, right: noBorder
-      };
+    if (singleColOptions) {
+      for (let i = 0; i < optionsWithOrig.length; i++) {
+        const opt = optionsWithOrig[i];
+        const optRtl = isArabic(opt.text);
+        
+        const noBorder = { style: BorderStyle.NONE, size: 0, color: "auto" };
+        const borders = {
+          top: noBorder, bottom: noBorder, left: noBorder, right: noBorder
+        };
+        
+        tableRows.push(
+          new TableRow({
+            children: [
+              new TableCell({
+                width: { size: 100, type: WidthType.PERCENTAGE },
+                borders,
+                children: [
+                  new Paragraph({
+                    alignment: optRtl ? AlignmentType.RIGHT : AlignmentType.LEFT,
+                    bidirectional: optRtl,
+                    spacing: { before: paperSaver ? 10 : 20, after: paperSaver ? 10 : 20, line: paperSaver ? 180 : 240 },
+                    children: [
+                      new TextRun({ 
+                        text: showAnswers && opt.isCorrect ? " [X] " : " [  ] ",
+                        bold: showAnswers && opt.isCorrect,
+                        color: showAnswers && opt.isCorrect ? "059669" : undefined,
+                        size: paperSaver ? 16 : 20
+                      }),
+                      new TextRun({ 
+                        text: `${String.fromCharCode(97 + i)}) `,
+                        bold: showAnswers && opt.isCorrect,
+                        color: showAnswers && opt.isCorrect ? "059669" : undefined,
+                        size: paperSaver ? 16 : 20
+                      }),
+                      ...htmlToDocxRuns(opt.text, { 
+                        bold: showAnswers && opt.isCorrect,
+                        color: showAnswers && opt.isCorrect ? "059669" : undefined,
+                        size: paperSaver ? 16 : 20
+                      }),
+                    ],
+                  })
+                ]
+              })
+            ]
+          })
+        );
+      }
+    } else {
+      for (let i = 0; i < optionsWithOrig.length; i += 2) {
+        const opt1 = optionsWithOrig[i];
+        const opt2 = optionsWithOrig[i + 1];
+        const opt1Rtl = isArabic(opt1.text);
+        
+        const noBorder = { style: BorderStyle.NONE, size: 0, color: "auto" };
+        const borders = {
+          top: noBorder, bottom: noBorder, left: noBorder, right: noBorder
+        };
 
-      const cells = [
-        new TableCell({
-          width: { size: 50, type: WidthType.PERCENTAGE },
-          borders,
-          children: [
-            new Paragraph({
-              alignment: opt1Rtl ? AlignmentType.RIGHT : AlignmentType.LEFT,
-              bidirectional: opt1Rtl,
-              children: [
-                new TextRun({ 
-                  text: showAnswers && opt1.isCorrect ? " [X] " : " [  ] ",
-                  bold: showAnswers && opt1.isCorrect,
-                  color: showAnswers && opt1.isCorrect ? "059669" : undefined
-                }),
-                new TextRun({ 
-                  text: `${String.fromCharCode(97 + i)}) `,
-                  bold: showAnswers && opt1.isCorrect,
-                  color: showAnswers && opt1.isCorrect ? "059669" : undefined
-                }),
-                ...htmlToDocxRuns(opt1.text, { 
-                  bold: showAnswers && opt1.isCorrect,
-                  color: showAnswers && opt1.isCorrect ? "059669" : undefined
-                }),
-              ],
-            })
-          ],
-        })
-      ];
-
-      if (opt2) {
-        const opt2Rtl = isArabic(opt2.text);
-        cells.push(
+        const cells = [
           new TableCell({
             width: { size: 50, type: WidthType.PERCENTAGE },
             borders,
             children: [
               new Paragraph({
-                alignment: opt2Rtl ? AlignmentType.RIGHT : AlignmentType.LEFT,
-                bidirectional: opt2Rtl,
+                alignment: opt1Rtl ? AlignmentType.RIGHT : AlignmentType.LEFT,
+                bidirectional: opt1Rtl,
+                spacing: { before: paperSaver ? 20 : 40, after: paperSaver ? 20 : 40, line: paperSaver ? 180 : 240 },
                 children: [
                   new TextRun({ 
-                    text: showAnswers && opt2.isCorrect ? " [X] " : " [  ] ",
-                    bold: showAnswers && opt2.isCorrect,
-                    color: showAnswers && opt2.isCorrect ? "059669" : undefined
+                    text: showAnswers && opt1.isCorrect ? " [X] " : " [  ] ",
+                    bold: showAnswers && opt1.isCorrect,
+                    color: showAnswers && opt1.isCorrect ? "059669" : undefined,
+                    size: paperSaver ? 16 : 20
                   }),
                   new TextRun({ 
-                    text: `${String.fromCharCode(97 + i + 1)}) `,
-                    bold: showAnswers && opt2.isCorrect,
-                    color: showAnswers && opt2.isCorrect ? "059669" : undefined
+                    text: `${String.fromCharCode(97 + i)}) `,
+                    bold: showAnswers && opt1.isCorrect,
+                    color: showAnswers && opt1.isCorrect ? "059669" : undefined,
+                    size: paperSaver ? 16 : 20
                   }),
-                  ...htmlToDocxRuns(opt2.text, { 
-                    bold: showAnswers && opt2.isCorrect,
-                    color: showAnswers && opt2.isCorrect ? "059669" : undefined
+                  ...htmlToDocxRuns(opt1.text, { 
+                    bold: showAnswers && opt1.isCorrect,
+                    color: showAnswers && opt1.isCorrect ? "059669" : undefined,
+                    size: paperSaver ? 16 : 20
                   }),
                 ],
               })
             ],
           })
-        );
-      } else {
-        cells.push(new TableCell({ width: { size: 50, type: WidthType.PERCENTAGE }, borders, children: [] }));
+        ];
+
+        if (opt2) {
+          const opt2Rtl = isArabic(opt2.text);
+          cells.push(
+            new TableCell({
+              width: { size: 50, type: WidthType.PERCENTAGE },
+              borders,
+              children: [
+                new Paragraph({
+                  alignment: opt2Rtl ? AlignmentType.RIGHT : AlignmentType.LEFT,
+                  bidirectional: opt2Rtl,
+                  spacing: { before: paperSaver ? 20 : 40, after: paperSaver ? 20 : 40, line: paperSaver ? 180 : 240 },
+                  children: [
+                    new TextRun({ 
+                      text: showAnswers && opt2.isCorrect ? " [X] " : " [  ] ",
+                      bold: showAnswers && opt2.isCorrect,
+                      color: showAnswers && opt2.isCorrect ? "059669" : undefined,
+                      size: paperSaver ? 16 : 20
+                    }),
+                    new TextRun({ 
+                      text: `${String.fromCharCode(97 + i + 1)}) `,
+                      bold: showAnswers && opt2.isCorrect,
+                      color: showAnswers && opt2.isCorrect ? "059669" : undefined,
+                      size: paperSaver ? 16 : 20
+                    }),
+                    ...htmlToDocxRuns(opt2.text, { 
+                      bold: showAnswers && opt2.isCorrect,
+                      color: showAnswers && opt2.isCorrect ? "059669" : undefined,
+                      size: paperSaver ? 16 : 20
+                    }),
+                  ],
+                })
+              ],
+            })
+          );
+        } else {
+          cells.push(new TableCell({ width: { size: 50, type: WidthType.PERCENTAGE }, borders, children: [] }));
+        }
+        
+        tableRows.push(new TableRow({ children: cells }));
       }
-      
-      tableRows.push(new TableRow({ children: cells }));
     }
 
     elements.push(new Table({
@@ -1009,10 +1121,11 @@ function renderQuestionDocx(q: Question, index: number, showAnswers: boolean, im
           alignment: optRtl ? AlignmentType.RIGHT : AlignmentType.LEFT,
           bidirectional: optRtl,
           indent: optRtl ? undefined : { left: 720 },
+          spacing: { before: paperSaver ? 20 : 40, after: paperSaver ? 20 : 40, line: paperSaver ? 180 : 240 },
           children: [
-            new TextRun({ text: " [  ] " }),
-            ...htmlToDocxRuns(opt.text),
-            showAnswers && q.correctOrder ? new TextRun({ text: ` (Pos: ${q.correctOrder.indexOf(opt.originalIndex) + 1})`, color: "059669", bold: true }) : new TextRun({}),
+            new TextRun({ text: " [  ] ", size: paperSaver ? 16 : 20 }),
+            ...htmlToDocxRuns(opt.text, { size: paperSaver ? 16 : 20 }),
+            showAnswers && q.correctOrder ? new TextRun({ text: ` (Pos: ${q.correctOrder.indexOf(opt.originalIndex) + 1})`, color: "059669", bold: true, size: paperSaver ? 16 : 20 }) : new TextRun({}),
           ],
         })
       );
@@ -1048,40 +1161,43 @@ function renderQuestionDocx(q: Question, index: number, showAnswers: boolean, im
             children: [new Paragraph({ 
               alignment: rtl ? AlignmentType.RIGHT : AlignmentType.LEFT, 
               bidirectional: rtl, 
+              spacing: { before: paperSaver ? 20 : 40, after: paperSaver ? 20 : 40, line: paperSaver ? 180 : 240 },
               children: [new TextRun({ 
                 text: columnAHeader, 
                 bold: true, 
-                size: 20 
+                size: paperSaver ? 16 : 20 
               })] 
             })],
             shading: { fill: "f1f5f9" },
             verticalAlign: VerticalAlign.CENTER,
-            margins: { top: 100, bottom: 100, left: 100, right: 100 }
+            margins: { top: paperSaver ? 30 : 60, bottom: paperSaver ? 30 : 60, left: 100, right: 100 }
           }),
           new TableCell({ 
             width: { size: 16, type: WidthType.PERCENTAGE },
             children: [new Paragraph({ 
-              children: [new TextRun({ text: matchingHeader, bold: true, size: 20 })], 
-              alignment: AlignmentType.CENTER 
+              children: [new TextRun({ text: matchingHeader, bold: true, size: paperSaver ? 16 : 20 })], 
+              alignment: AlignmentType.CENTER,
+              spacing: { before: paperSaver ? 20 : 40, after: paperSaver ? 20 : 40, line: paperSaver ? 180 : 240 }
             })],
             shading: { fill: "f1f5f9" },
             verticalAlign: VerticalAlign.CENTER,
-            margins: { top: 100, bottom: 100, left: 100, right: 100 }
+            margins: { top: paperSaver ? 30 : 60, bottom: paperSaver ? 30 : 60, left: 100, right: 100 }
           }),
           new TableCell({ 
             width: { size: 42, type: WidthType.PERCENTAGE },
             children: [new Paragraph({ 
               alignment: rtl ? AlignmentType.RIGHT : AlignmentType.LEFT, 
               bidirectional: rtl, 
+              spacing: { before: paperSaver ? 20 : 40, after: paperSaver ? 20 : 40, line: paperSaver ? 180 : 240 },
               children: [new TextRun({ 
                 text: columnBHeader, 
                 bold: true, 
-                size: 20 
+                size: paperSaver ? 16 : 20 
               })] 
             })],
             shading: { fill: "f1f5f9" },
             verticalAlign: VerticalAlign.CENTER,
-            margins: { top: 100, bottom: 100, left: 100, right: 100 }
+            margins: { top: paperSaver ? 30 : 60, bottom: paperSaver ? 30 : 60, left: 100, right: 100 }
           }),
         ],
       })
@@ -1089,80 +1205,84 @@ function renderQuestionDocx(q: Question, index: number, showAnswers: boolean, im
 
     // Rows for each option
     for (let i = 0; i < Math.max(leftOptions.length, shuffledRight.length); i++) {
-      const leftText = leftOptions[i]?.text || "";
-      const rightText = shuffledRight[i]?.text || "";
-      const rightLabel = String.fromCharCode(65 + i); // A, B, C...
-      const lRtl = isArabic(leftText);
-      const rRtl = isArabic(rightText);
-      
-      const middleCellParagraphs: Paragraph[] = [];
-      
-      if (i < leftOptions.length) {
-        if (showAnswers && q.correctMatches) {
-          const correctRightOrigIdx = q.correctMatches[i];
-          const currentIdxInShuffled = shuffledRight.findIndex(r => r.originalIndex === correctRightOrigIdx);
-          const answerLabel = currentIdxInShuffled !== -1 ? String.fromCharCode(65 + currentIdxInShuffled) : "?";
-          
-          middleCellParagraphs.push(new Paragraph({
-            alignment: AlignmentType.CENTER,
-            children: [
-              new TextRun({ 
-                text: `[ ${answerLabel} ]`, 
-                bold: true,
-                color: "059669",
-                size: 20
-              })
-            ]
-          }));
-        } else {
-          middleCellParagraphs.push(new Paragraph({
-            alignment: AlignmentType.CENTER,
-            children: [
-              new TextRun({ text: "[      ]", size: 20, color: "cbd5e1" })
-            ]
-          }));
+        const leftText = leftOptions[i]?.text || "";
+        const rightText = shuffledRight[i]?.text || "";
+        const rightLabel = String.fromCharCode(65 + i); // A, B, C...
+        const lRtl = isArabic(leftText);
+        const rRtl = isArabic(rightText);
+        
+        const middleCellParagraphs: Paragraph[] = [];
+        
+        if (i < leftOptions.length) {
+          if (showAnswers && q.correctMatches) {
+            const correctRightOrigIdx = q.correctMatches[i];
+            const currentIdxInShuffled = shuffledRight.findIndex(r => r.originalIndex === correctRightOrigIdx);
+            const answerLabel = currentIdxInShuffled !== -1 ? String.fromCharCode(65 + currentIdxInShuffled) : "?";
+            
+            middleCellParagraphs.push(new Paragraph({
+              alignment: AlignmentType.CENTER,
+              spacing: { before: paperSaver ? 15 : 30, after: paperSaver ? 15 : 30, line: paperSaver ? 180 : 240 },
+              children: [
+                new TextRun({ 
+                  text: `[ ${answerLabel} ]`, 
+                  bold: true,
+                  color: "059669",
+                  size: paperSaver ? 16 : 20
+                })
+              ]
+            }));
+          } else {
+            middleCellParagraphs.push(new Paragraph({
+              alignment: AlignmentType.CENTER,
+              spacing: { before: paperSaver ? 15 : 30, after: paperSaver ? 15 : 30, line: paperSaver ? 180 : 240 },
+              children: [
+                new TextRun({ text: "[      ]", size: paperSaver ? 16 : 20, color: "cbd5e1" })
+              ]
+            }));
+          }
         }
-      }
 
-      tableRows.push(
-        new TableRow({
-          children: [
-            new TableCell({ 
-              width: { size: 42, type: WidthType.PERCENTAGE },
-              children: leftText ? [new Paragraph({ 
-                alignment: lRtl ? AlignmentType.RIGHT : AlignmentType.LEFT, 
-                bidirectional: lRtl, 
-                children: [
-                  new TextRun({ text: `${i + 1}. `, bold: true, size: 20 }),
-                  ...htmlToDocxRuns(leftText, { size: 20 })
-                ] 
-              })] : [],
-              verticalAlign: VerticalAlign.CENTER,
-              margins: { top: 100, bottom: 100, left: 100, right: 100 }
-            }),
-            new TableCell({ 
-              width: { size: 16, type: WidthType.PERCENTAGE },
-              verticalAlign: VerticalAlign.CENTER,
-              children: middleCellParagraphs,
-              shading: showAnswers && i < leftOptions.length ? { fill: "f0fdf4" } : undefined,
-              margins: { top: 50, bottom: 50 }
-            }),
-            new TableCell({ 
-              width: { size: 42, type: WidthType.PERCENTAGE },
-              children: rightText ? [new Paragraph({ 
-                alignment: rRtl ? AlignmentType.RIGHT : AlignmentType.LEFT, 
-                bidirectional: rRtl, 
-                children: [
-                  new TextRun({ text: `${rightLabel}. `, bold: true, size: 20 }),
-                  ...htmlToDocxRuns(rightText, { size: 20 })
-                ] 
-              })] : [],
-              verticalAlign: VerticalAlign.CENTER,
-              margins: { top: 100, bottom: 100, left: 100, right: 100 }
-            }),
-          ],
-        })
-      );
+        tableRows.push(
+          new TableRow({
+            children: [
+              new TableCell({ 
+                width: { size: 42, type: WidthType.PERCENTAGE },
+                children: leftText ? [new Paragraph({ 
+                  alignment: lRtl ? AlignmentType.RIGHT : AlignmentType.LEFT, 
+                  bidirectional: lRtl, 
+                  spacing: { before: paperSaver ? 20 : 40, after: paperSaver ? 20 : 40, line: paperSaver ? 180 : 240 },
+                  children: [
+                    new TextRun({ text: `${i + 1}. `, bold: true, size: paperSaver ? 16 : 20 }),
+                    ...htmlToDocxRuns(leftText, { size: paperSaver ? 16 : 20 })
+                  ] 
+                })] : [],
+                verticalAlign: VerticalAlign.CENTER,
+                margins: { top: paperSaver ? 30 : 60, bottom: paperSaver ? 30 : 60, left: 100, right: 100 }
+              }),
+              new TableCell({ 
+                width: { size: 16, type: WidthType.PERCENTAGE },
+                verticalAlign: VerticalAlign.CENTER,
+                children: middleCellParagraphs,
+                shading: showAnswers && i < leftOptions.length ? { fill: "f0fdf4" } : undefined,
+                margins: { top: paperSaver ? 15 : 30, bottom: paperSaver ? 15 : 30 }
+              }),
+              new TableCell({ 
+                width: { size: 42, type: WidthType.PERCENTAGE },
+                children: rightText ? [new Paragraph({ 
+                  alignment: rRtl ? AlignmentType.RIGHT : AlignmentType.LEFT, 
+                  bidirectional: rRtl, 
+                  spacing: { before: paperSaver ? 20 : 40, after: paperSaver ? 20 : 40, line: paperSaver ? 180 : 240 },
+                  children: [
+                    new TextRun({ text: `${rightLabel}. `, bold: true, size: paperSaver ? 16 : 20 }),
+                    ...htmlToDocxRuns(rightText, { size: paperSaver ? 16 : 20 })
+                  ] 
+                })] : [],
+                verticalAlign: VerticalAlign.CENTER,
+                margins: { top: paperSaver ? 30 : 60, bottom: paperSaver ? 30 : 60, left: 100, right: 100 }
+              }),
+            ],
+          })
+        );
     }
 
     elements.push(new Table({
@@ -1177,10 +1297,10 @@ function renderQuestionDocx(q: Question, index: number, showAnswers: boolean, im
         new TextRun({ 
           text: rtl ? "قم بمطابقة كل رقم من العمود الأيمن مع الحرف المقابل له في العمود الأوسط." : "Indiquez pour chaque numéro de la colonne de gauche la lettre correspondante dans la colonne centrale.",
           italics: true,
-          size: 18
+          size: paperSaver ? 14 : 18
         })
       ],
-      spacing: { before: 200, after: 200 }
+      spacing: { before: paperSaver ? 50 : 100, after: paperSaver ? 50 : 100, line: paperSaver ? 180 : 240 }
     }));
   } else if (q.type === 'fill-in-the-blanks') {
     // Already rendered in header above
@@ -1189,33 +1309,40 @@ function renderQuestionDocx(q: Question, index: number, showAnswers: boolean, im
       alignment: rtl ? AlignmentType.RIGHT : AlignmentType.LEFT,
       bidirectional: rtl,
       indent: rtl ? undefined : { left: 720 }, 
-      text: "................................................................................................................................................................" 
+      text: "................................................................................................................................................................",
+      spacing: { before: paperSaver ? 20 : 40, after: paperSaver ? 20 : 40, line: paperSaver ? 180 : 240 }
     }));
-    elements.push(new Paragraph({ 
-      alignment: rtl ? AlignmentType.RIGHT : AlignmentType.LEFT,
-      bidirectional: rtl,
-      indent: rtl ? undefined : { left: 720 }, 
-      text: "................................................................................................................................................................" 
-    }));
+    if (!paperSaver) {
+      elements.push(new Paragraph({ 
+        alignment: rtl ? AlignmentType.RIGHT : AlignmentType.LEFT,
+        bidirectional: rtl,
+        indent: rtl ? undefined : { left: 720 }, 
+        text: "................................................................................................................................................................",
+        spacing: { before: 40, after: 40, line: 240 }
+      }));
+    }
     if (showAnswers) {
       elements.push(new Paragraph({ 
         alignment: rtl ? AlignmentType.RIGHT : AlignmentType.LEFT,
         bidirectional: rtl,
         indent: rtl ? undefined : { left: 720 }, 
+        spacing: { before: paperSaver ? 30 : 60, after: paperSaver ? 30 : 60, line: paperSaver ? 180 : 240 },
         children: [
-          new TextRun({ text: `${rtl ? 'الإجابة:' : 'Corrigé:'} `, italics: true, color: "059669", bold: true }),
-          ...htmlToDocxRuns(q.correctAnswer || '', { italic: true, color: "059669" })
+          new TextRun({ text: `${rtl ? 'الإجابة:' : 'Corrigé:'} `, italics: true, color: "059669", bold: true, size: paperSaver ? 16 : 20 }),
+          ...htmlToDocxRuns(q.correctAnswer || '', { italic: true, color: "059669", size: paperSaver ? 16 : 20 })
         ] 
       }));
     }
   } else if (q.type === 'practical') {
-    elements.push(new Paragraph({ 
-      alignment: rtl ? AlignmentType.RIGHT : AlignmentType.LEFT,
-      bidirectional: rtl,
-      indent: rtl ? undefined : { left: 720 }, 
-      text: "................................................................................................................................................................",
-      spacing: { before: 200 }
-    }));
+    if (!paperSaver) {
+      elements.push(new Paragraph({ 
+        alignment: rtl ? AlignmentType.RIGHT : AlignmentType.LEFT,
+        bidirectional: rtl,
+        indent: rtl ? undefined : { left: 720 }, 
+        text: "................................................................................................................................................................",
+        spacing: { before: 80, after: 40, line: 240 }
+      }));
+    }
     elements.push(new Paragraph({ 
       alignment: rtl ? AlignmentType.RIGHT : AlignmentType.LEFT,
       bidirectional: rtl,
@@ -1225,10 +1352,10 @@ function renderQuestionDocx(q: Question, index: number, showAnswers: boolean, im
           text: rtl ? "مساحة للتقييم العملي / ملاحظات المكون..." : "Espace pour l'évaluation pratique / observations du formateur...",
           italics: true,
           color: "666666",
-          size: 18
+          size: paperSaver ? 14 : 18
         })
       ],
-      spacing: { before: 200 }
+      spacing: { before: paperSaver ? 40 : 80, after: paperSaver ? 40 : 80, line: paperSaver ? 180 : 240 }
     }));
   }
 
@@ -1252,11 +1379,27 @@ function extractImageUrls(html: string): string[] {
   return urls;
 }
 
-function htmlToDocxElements(html: string, options: { size?: number } = {}, imageBuffers: Map<string, Uint8Array | null>): Paragraph[] {
+function htmlToDocxElements(
+  html: string, 
+  options: { 
+    size?: number; 
+    prefixRuns?: (TextRun | ImageRun)[]; 
+    suffixRuns?: (TextRun | ImageRun)[]; 
+  } = {}, 
+  imageBuffers: Map<string, Uint8Array | null>
+): Paragraph[] {
   if (!html) return [];
   const parser = new DOMParser();
   const doc = parser.parseFromString(html, 'text/html');
-  const paragraphs: Paragraph[] = [];
+  
+  interface PendingParagraph {
+    runs: (TextRun | ImageRun)[];
+    rtl: boolean;
+    bullet?: any;
+    numbering?: any;
+    spacing: { before: number; after: number; line?: number };
+  }
+  const pendingParagraphs: PendingParagraph[] = [];
 
   const processElement = (element: Element, isListItem = false, listLevel = 0, listType: 'bullet' | 'number' = 'bullet') => {
     const runs: (TextRun | ImageRun)[] = [];
@@ -1264,7 +1407,7 @@ function htmlToDocxElements(html: string, options: { size?: number } = {}, image
 
     const traverse = (node: Node, style: any) => {
       if (node.nodeType === Node.TEXT_NODE) {
-        const text = node.textContent || '';
+        const text = (node.textContent || '').replace(/\u00A0/g, ' ');
         if (text.trim() || text === ' ') {
           runs.push(new TextRun({
             text,
@@ -1355,13 +1498,13 @@ function htmlToDocxElements(html: string, options: { size?: number } = {}, image
           const tag = (child as Element).tagName.toLowerCase();
           if (['ul', 'ol', 'p', 'div'].includes(tag)) {
              if (runs.length > 0) {
-                paragraphs.push(new Paragraph({
-                  children: [...runs],
-                  alignment: rtl ? AlignmentType.RIGHT : AlignmentType.LEFT,
-                  bidirectional: rtl,
+                pendingParagraphs.push({
+                  runs: [...runs],
+                  rtl,
                   bullet: isListItem && listType === 'bullet' ? { level: listLevel } : undefined,
                   numbering: isListItem && listType === 'number' ? { reference: 'main-numbering', level: listLevel } : undefined,
-                }));
+                  spacing: { before: 60, after: 60, line: 240 }
+                });
                 runs.length = 0;
              }
              processNode(child, listLevel + (isListItem ? 1 : 0));
@@ -1372,15 +1515,13 @@ function htmlToDocxElements(html: string, options: { size?: number } = {}, image
     });
 
     if (runs.length > 0) {
-      const p = new Paragraph({
-        children: [...runs],
-        alignment: rtl ? AlignmentType.RIGHT : AlignmentType.LEFT,
-        bidirectional: rtl,
+      pendingParagraphs.push({
+        runs: [...runs],
+        rtl,
         bullet: isListItem && listType === 'bullet' ? { level: listLevel } : undefined,
         numbering: isListItem && listType === 'number' ? { reference: 'main-numbering', level: listLevel } : undefined,
-        spacing: { before: isListItem ? 0 : 120, after: isListItem ? 0 : 120 }
+        spacing: { before: isListItem ? 0 : 60, after: isListItem ? 0 : 60, line: 240 }
       });
-      paragraphs.push(p);
     }
   };
 
@@ -1409,9 +1550,38 @@ function htmlToDocxElements(html: string, options: { size?: number } = {}, image
   doc.body.childNodes.forEach(node => processNode(node));
 
   // If no paragraphs were added (e.g. just raw text in body), do one final pass
-  if (paragraphs.length === 0 && doc.body.textContent?.trim()) {
+  if (pendingParagraphs.length === 0 && doc.body.textContent?.trim()) {
     processElement(doc.body as any);
   }
+
+  if (pendingParagraphs.length === 0) {
+    pendingParagraphs.push({
+      runs: [],
+      rtl: false,
+      spacing: { before: 60, after: 60, line: 240 }
+    });
+  }
+
+  // Prepend prefixRuns if provided
+  if (options.prefixRuns && options.prefixRuns.length > 0) {
+    pendingParagraphs[0].runs = [...options.prefixRuns, ...pendingParagraphs[0].runs];
+  }
+
+  // Append suffixRuns if provided
+  if (options.suffixRuns && options.suffixRuns.length > 0) {
+    const lastIdx = pendingParagraphs.length - 1;
+    pendingParagraphs[lastIdx].runs = [...pendingParagraphs[lastIdx].runs, ...options.suffixRuns];
+  }
+
+  // Map to actual Paragraph elements
+  const paragraphs = pendingParagraphs.map(p => new Paragraph({
+    children: p.runs,
+    alignment: p.rtl ? AlignmentType.RIGHT : AlignmentType.LEFT,
+    bidirectional: p.rtl,
+    bullet: p.bullet,
+    numbering: p.numbering,
+    spacing: p.spacing
+  }));
 
   return paragraphs;
 }
@@ -1427,7 +1597,7 @@ function htmlToDocxRuns(html: string, options: { bold?: boolean, size?: number, 
   
   const processNode = (node: Node, currentStyle: any) => {
     if (node.nodeType === Node.TEXT_NODE) {
-      const text = node.textContent || '';
+      const text = (node.textContent || '').replace(/\u00A0/g, ' ');
       if (text.trim() || text === ' ') {
         runs.push(new TextRun({
           text,
@@ -1507,6 +1677,7 @@ function cleanHtml(html: string): string {
   return html
     .replace(/<[^>]*>?/gm, '') // Remove tags
     .replace(/&nbsp;/g, ' ')
+    .replace(/\u00A0/g, ' ')
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')

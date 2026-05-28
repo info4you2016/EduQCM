@@ -2,7 +2,8 @@ import React, { useState, useMemo } from 'react';
 import { 
   Users, BookOpen, ClipboardList, Bell, Plus, Search, Filter, 
   ChevronDown, Edit2, Trash2, LayoutDashboard, Database, Eye, History, CheckCircle2, Star, Clock, BarChart, Target,
-  FileDown, Sparkles, FileText, Settings, Loader2, Copy, AlertTriangle, Radio
+  FileDown, Sparkles, FileText, Settings, Loader2, Copy, AlertTriangle, Radio,
+  ArrowUpDown, ArrowUp, ArrowDown, Trophy, TrendingUp, ShieldCheck
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { api } from '../../lib/api';
@@ -21,22 +22,24 @@ import { StatisticsTab } from '../sections/StatisticsTab';
 import { ExamPreviewModal } from '../modals/ExamPreviewModal';
 import { LiveSupervisionModal } from '../modals/LiveSupervisionModal';
 import { FiliereGroupManagement } from './FiliereGroupManagement';
+import { DetailedNotificationCard } from '../DetailedNotificationCard';
 import { AdminUserManagement } from '../sections/AdminUserManagement';
 import { AuditLogsView } from '../sections/AuditLogsView';
 import { AiAssistantView } from './AiAssistantView';
+import { SuiviAnalyseView } from './SuiviAnalyseView';
 import { ResultDetailModal } from '../modals/ResultDetailModal';
 import { AddModuleForm } from '../forms/AddModuleForm';
 import { AddNotificationForm } from '../forms/AddNotificationForm';
 import { AddExamForm } from '../forms/AddExamForm';
 import { ExamPerformanceModal } from '../modals/ExamPerformanceModal';
 import { ActivateExamModal } from '../modals/ActivateExamModal';
+import { ExportModelModal } from '../modals/ExportModelModal';
 import { ExamExportTemplate } from '../ExamExportTemplate';
 import { ResultsExportTemplate } from '../ResultsExportTemplate';
 import { PVExportTemplate } from '../PVExportTemplate';
-import html2canvas from 'html2canvas';
-import { jsPDF } from 'jspdf';
 import { exportExamToWord } from '../../lib/docxExport';
 import { exportPVToWord } from '../../lib/pvDocxExport';
+import { generateExamPDF, generateResultsPDF } from '../../lib/pdfExport';
 import Papa from 'papaparse';
 import { saveAs } from 'file-saver';
 import * as XLSX from 'xlsx';
@@ -93,9 +96,20 @@ export const TeacherDashboard = ({
   const [resultsFilterGroup, setResultsFilterGroup] = useState<string>('all');
   const [resultsFilterScore, setResultsFilterScore] = useState<string>('all');
   const [resultsPage, setResultsPage] = useState(1);
-  const resultsPerPage = 10;
+  const [resultsPerPage, setResultsPerPage] = useState(10);
+  const [resultsMainMode, setResultsMainMode] = useState<'suivi' | 'registry'>('suivi');
   const [resultsViewMode, setResultsViewMode] = useState<'by-exam' | 'all-results'>('by-exam');
+  const [resultsSortField, setResultsSortField] = useState<'name' | 'score' | 'date'>('date');
+  const [resultsSortOrder, setResultsSortOrder] = useState<'asc' | 'desc'>('desc');
   const [selectedExamId, setSelectedExamId] = useState<number | null>(null);
+  const [selectedExamSubTab, setSelectedExamSubTab] = useState<'copies' | 'questions'>('copies');
+  const [expandedQuestionIdx, setExpandedQuestionIdx] = useState<number | null>(null);
+
+  React.useEffect(() => {
+    setSelectedExamSubTab('copies');
+    setExpandedQuestionIdx(null);
+  }, [selectedExamId]);
+
   const [sortBy, setSortBy] = useState<'createdAt' | 'title'>('createdAt');
   const [previewExam, setPreviewExam] = useState<Exam | null>(null);
   const [supervisingExam, setSupervisingExam] = useState<Exam | null>(null);
@@ -126,11 +140,37 @@ export const TeacherDashboard = ({
     const successCount = list.filter(r => (r.score / (r.totalPoints || 1)) >= 0.5).length;
     const successPercent = total > 0 ? (successCount / total) * 100 : 0;
 
+    const percentages = list.map(r => (r.score / (r.totalPoints || 1)) * 100).sort((a, b) => a - b);
+    const maxScore = percentages.length > 0 ? Math.max(...percentages) : 0;
+    const minScore = percentages.length > 0 ? Math.min(...percentages) : 0;
+    let medianScore = 0;
+    if (percentages.length > 0) {
+      const mid = Math.floor(percentages.length / 2);
+      medianScore = percentages.length % 2 !== 0 ? percentages[mid] : (percentages[mid - 1] + percentages[mid]) / 2;
+    }
+
+    const distribution = {
+      excellent: list.filter(r => ((r.score / (r.totalPoints || 1)) * 100) >= 80).length,
+      good: list.filter(r => {
+        const pct = (r.score / (r.totalPoints || 1)) * 100;
+        return pct >= 60 && pct < 80;
+      }).length,
+      pass: list.filter(r => {
+        const pct = (r.score / (r.totalPoints || 1)) * 100;
+        return pct >= 50 && pct < 60;
+      }).length,
+      fail: list.filter(r => ((r.score / (r.totalPoints || 1)) * 100) < 50).length
+    };
+
     return {
       list,
       total,
       avgScore: Math.round(avgScore),
-      successPercent: Math.round(successPercent)
+      successPercent: Math.round(successPercent),
+      maxScore: Math.round(maxScore),
+      minScore: Math.round(minScore),
+      medianScore: Math.round(medianScore),
+      distribution
     };
   }, [results, exams, searchQuery, selectedExamId, resultsFilterModule, resultsFilterGroup, resultsFilterScore, groups]);
 
@@ -146,8 +186,93 @@ export const TeacherDashboard = ({
     };
   }, [results]);
 
+  const questionStats = useMemo(() => {
+    if (!selectedExamId) return [];
+    const exam = exams.find(e => e.id === selectedExamId);
+    if (!exam) return [];
+
+    const examResults = results.filter(r => r.examId === selectedExamId);
+    const totalStudents = examResults.length;
+
+    return exam.questions.map((q, idx) => {
+      let correctCount = 0;
+      let partialCount = 0;
+      let incorrectCount = 0;
+      let totalPointsEarned = 0;
+
+      examResults.forEach(r => {
+        const qRes = r.questionResults?.[idx];
+        const pointsEarned = qRes?.pointsEarned || 0;
+        totalPointsEarned += pointsEarned;
+
+        if (qRes?.isCorrect) {
+          correctCount++;
+        } else if (pointsEarned > 0) {
+          partialCount++;
+        } else {
+          incorrectCount++;
+        }
+      });
+
+      const successPercent = totalStudents > 0 
+        ? Math.round((correctCount / totalStudents) * 100) 
+        : 0;
+
+      const partialPercent = totalStudents > 0 
+        ? Math.round((partialCount / totalStudents) * 100) 
+        : 0;
+
+      const incorrectPercent = totalStudents > 0 
+        ? Math.round((incorrectCount / totalStudents) * 100) 
+        : 0;
+
+      const avgPoints = totalStudents > 0 ? (totalPointsEarned / totalStudents) : 0;
+      const avgScorePct = Math.round((avgPoints / (q.points || 1)) * 100);
+
+      // Student details who got a score of 0 on this question
+      const strugglingStudents = examResults
+        .filter(r => {
+          const qRes = r.questionResults?.[idx];
+          return !qRes || qRes.pointsEarned === 0;
+        })
+        .map(r => ({
+          name: r.studentName || 'Étudiant',
+          email: r.studentEmail || '',
+          group: r.groupName || ''
+        }));
+
+      return {
+        index: idx,
+        questionText: q.text,
+        type: q.type,
+        points: q.points || 1,
+        correctCount,
+        partialCount,
+        incorrectCount,
+        successPercent,
+        partialPercent,
+        incorrectPercent,
+        avgPoints,
+        avgScorePct,
+        strugglingStudents
+      };
+    });
+  }, [selectedExamId, exams, results]);
+
   const sortedAndPaginatedResults = useMemo(() => {
-    const sorted = [...filteredResultsStats.list].sort((a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime());
+    const sorted = [...filteredResultsStats.list].sort((a, b) => {
+      let comparison = 0;
+      if (resultsSortField === 'name') {
+        comparison = (a.studentName || '').localeCompare(b.studentName || '');
+      } else if (resultsSortField === 'score') {
+        const pctA = a.score / (a.totalPoints || 1);
+        const pctB = b.score / (b.totalPoints || 1);
+        comparison = pctA - pctB;
+      } else {
+        comparison = new Date(a.completedAt).getTime() - new Date(b.completedAt).getTime();
+      }
+      return resultsSortOrder === 'desc' ? -comparison : comparison;
+    });
     const totalPages = Math.ceil(sorted.length / resultsPerPage);
     const startIndex = (resultsPage - 1) * resultsPerPage;
     const paginated = sorted.slice(startIndex, startIndex + resultsPerPage);
@@ -156,7 +281,26 @@ export const TeacherDashboard = ({
       totalPages: Math.max(1, totalPages),
       paginated
     };
-  }, [filteredResultsStats.list, resultsPage, resultsPerPage]);
+  }, [filteredResultsStats.list, resultsSortField, resultsSortOrder, resultsPage, resultsPerPage]);
+
+  const SortIcon = ({ field }: { field: 'name' | 'score' | 'date' }) => {
+    if (resultsSortField !== field) {
+      return <ArrowUpDown className="w-3.5 h-3.5 ml-1.5 inline text-slate-300 opacity-50 group-hover:opacity-100 transition-opacity" />;
+    }
+    return resultsSortOrder === 'asc' 
+      ? <ArrowUp className="w-3.5 h-3.5 ml-1.5 inline text-indigo-600 font-black" />
+      : <ArrowDown className="w-3.5 h-3.5 ml-1.5 inline text-indigo-600 font-black" />;
+  };
+
+  const handleSort = (field: 'name' | 'score' | 'date') => {
+    if (resultsSortField === field) {
+      setResultsSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setResultsSortField(field);
+      setResultsSortOrder('desc');
+    }
+    setResultsPage(1);
+  };
 
   const statsCards = (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
@@ -196,7 +340,22 @@ export const TeacherDashboard = ({
   // Export states
   const exportRef = React.useRef<HTMLDivElement>(null);
   const [isExporting, setIsExporting] = useState(false);
-  const [exportData, setExportData] = useState<{ exam: Exam, module: Module, filiereName: string, filiereLevel?: string, groupName: string, showAnswers: boolean } | null>(null);
+  const [exportData, setExportData] = useState<{ 
+    exam: Exam, 
+    module: Module, 
+    filiereName: string, 
+    filiereLevel?: string, 
+    groupName: string, 
+    showAnswers: boolean, 
+    paperSaver?: boolean, 
+    qcmDoubleColumn?: boolean,
+    customSettings?: OrganizationSettings | null 
+  } | null>(null);
+
+  // Export selection modal states
+  const [exportConfigModalExam, setExportConfigModalExam] = useState<Exam | null>(null);
+  const [exportConfigModalFormat, setExportConfigModalFormat] = useState<'pdf' | 'docx'>('pdf');
+  const [exportConfigModalShowAnswers, setExportConfigModalShowAnswers] = useState<boolean>(false);
 
   // Results Export states
   const resultsExportRef = React.useRef<HTMLDivElement>(null);
@@ -259,417 +418,142 @@ export const TeacherDashboard = ({
     const filiereName = filiere ? `[${filiere.code}] ${filiere.name}` : 'N/A';
     const filiereLevel = filiere?.niveau || '';
 
-    setResultsExportData({
-      exam,
-      results: examResults,
-      module,
-      filiereName,
-      filiereLevel,
-      groupName
-    });
-
     setIsExportingResults(true);
-    
-    setTimeout(async () => {
-      if (resultsExportRef.current) {
-        try {
-          // Helper to scrub problematic CSS like oklch that crashes html2canvas
-          const scrubOklch = (doc: Document) => {
-            try {
-              // 1. Remove all external stylesheets and existing style blocks
-              const styles = doc.querySelectorAll('style, link[rel="stylesheet"]');
-              styles.forEach(s => {
-                try {
-                  s.parentElement?.removeChild(s);
-                } catch (e) {
-                  s.remove();
-                }
-              });
-
-              // 2. Explicitly disable all stylesheets in the clone in case some survived
-              for (let i = 0; i < doc.styleSheets.length; i++) {
-                try {
-                  doc.styleSheets[i].disabled = true;
-                } catch (e) {}
-              }
-
-              // 3. Inject a clean, safe style block
-              const cleanStyle = doc.createElement('style');
-              cleanStyle.innerHTML = `
-                * { 
-                  color: #000000 !important; 
-                  border-color: #000000 !important;
-                  box-shadow: none !important;
-                  text-shadow: none !important;
-                  background-image: none !important;
-                }
-                table, td, th { border: 1px solid #000 !important; border-collapse: collapse !important; }
-                .text-emerald-600, .text-green-600 { color: #059669 !important; }
-                .bg-emerald-50, .bg-green-50 { background-color: #f0fdf4 !important; }
-                h1, h2, h3, h4, h5, h6 { color: #000 !important; }
-              `;
-              doc.head.appendChild(cleanStyle);
-
-              // 4. Scrub all inline styles
-              const allElements = doc.querySelectorAll('*');
-              allElements.forEach(el => {
-                const element = el as HTMLElement;
-                if (element.style) {
-                  element.style.fontVariantLigatures = 'none';
-                }
-                const styleAttr = element.getAttribute('style') || '';
-                if (styleAttr.includes('oklch')) {
-                  element.setAttribute('style', styleAttr.replace(/oklch\([^)]+\)/g, '#888888'));
-                }
-              });
-            } catch (err) {
-              console.warn("Scrubbing failed, but continuing:", err);
-            }
-          };
-
-          const canvas = await html2canvas(resultsExportRef.current, {
-            scale: 4, 
-            useCORS: true,
-            logging: false,
-            allowTaint: true,
-            backgroundColor: '#ffffff',
-            windowWidth: 1200,
-            onclone: (doc) => {
-              scrubOklch(doc);
-              // Force clean styles on the container itself
-              const containerEl = doc.getElementById('results-export-container');
-              if (containerEl) {
-                containerEl.style.fontFamily = "'Times New Roman', Times, 'Amiri', serif";
-                containerEl.style.backgroundColor = '#ffffff';
-                containerEl.style.color = '#000000';
-              }
-            }
-          });
-          
-          const pdf = new jsPDF('p', 'mm', 'a4');
-          const pdfWidth = pdf.internal.pageSize.getWidth();
-          const pdfHeight = pdf.internal.pageSize.getHeight();
-          const margin = 10;
-          const contentWidth = pdfWidth - (2 * margin);
-
-          const el = resultsExportRef.current;
-          if (!el) return;
-
-          // Helper to add an element to PDF
-          const addElementToPdf = async (element: HTMLElement, addNewPage = false) => {
-            if (addNewPage) pdf.addPage();
-
-            const canvas = await html2canvas(element, {
-              scale: 3,
-              useCORS: true,
-              logging: false,
-              backgroundColor: '#ffffff',
-              windowWidth: 1200,
-              onclone: (doc) => {
-                scrubOklch(doc);
-              }
-            });
-
-            const imgData = canvas.toDataURL('image/jpeg', 0.95);
-            const imgProps = pdf.getImageProperties(imgData);
-            const imgHeight = (imgProps.height * contentWidth) / imgProps.width;
-            
-            // If it's too tall for one page, we might still need some slicing, 
-            // but for one student it usually fits.
-            pdf.addImage(imgData, 'JPEG', margin, margin, contentWidth, imgHeight, undefined, 'FAST');
-            return imgHeight;
-          };
-
-          // 1. Capture Summary
-          const summaryEl = el.querySelector('#export-summary-section') as HTMLElement;
-          if (summaryEl) {
-            await addElementToPdf(summaryEl);
-          }
-
-          // 2. Capture Each Student Card
-          const studentCards = el.querySelectorAll('.student-detail-card');
-          for (let i = 0; i < studentCards.length; i++) {
-            await addElementToPdf(studentCards[i] as HTMLElement, true);
-          }
-
-          // Add Page Numbers to all pages
-          const totalPages = pdf.getNumberOfPages();
-          for (let i = 1; i <= totalPages; i++) {
-            pdf.setPage(i);
-            pdf.setFont('helvetica', 'normal');
-            pdf.setFontSize(8);
-            pdf.setTextColor(150);
-            pdf.text(`${exam.title} - Page ${i} / ${totalPages}`, margin, pdfHeight - 5);
-            pdf.text(`Généré le ${new Date().toLocaleDateString()}`, pdfWidth - margin, pdfHeight - 5, { align: 'right' });
-          }
-
-          pdf.save(`Resultats_${exam.title.replace(/\s+/g, '_')}.pdf`);
-        } catch (err) {
-          console.error("Results PDF Export failed:", err);
-          alert("Erreur lors de l'exportation des résultats.");
-        } finally {
-          setIsExportingResults(false);
-          setResultsExportData(null);
-        }
-      }
-    }, 400);
-  };
-
-  const handleExportPDF = async (exam: Exam, showAnswers = false) => {
-    const module = modules.find(m => m.id === exam.moduleId);
-    if (!module) return;
-
-    const groupId = exam.groupId || groups.find(g => g.name === exam.groupName)?.id;
-    const group = groups.find(g => g.id === groupId);
-    const filiere = filieres.find(f => f.id === group?.filiereId || module.filiereId);
-
-    const groupName = group?.name || exam.groupName || '';
-    const filiereName = filiere ? `[${filiere.code}] ${filiere.name}` : 'N/A';
-    const filiereLevel = filiere?.niveau || '';
-
-    setExportData({
-      exam,
-      module,
-      filiereName,
-      filiereLevel,
-      groupName,
-      showAnswers
-    });
-
-    setIsExporting(true);
-    
-    // Tiny delay to ensure React renders the hidden template
-    setTimeout(async () => {
-      if (exportRef.current) {
-        try {
-          // Helper to scrub problematic CSS like oklch that crashes html2canvas
-          const scrubOklch = (doc: Document) => {
-            try {
-              // 1. Remove all external stylesheets and existing style blocks
-              const styles = doc.querySelectorAll('style, link[rel="stylesheet"]');
-              styles.forEach(s => {
-                try {
-                  s.parentElement?.removeChild(s);
-                } catch (e) {
-                  s.remove();
-                }
-              });
-
-              // 2. Explicitly disable all stylesheets in the clone in case some survived
-              for (let i = 0; i < doc.styleSheets.length; i++) {
-                try {
-                  doc.styleSheets[i].disabled = true;
-                } catch (e) {}
-              }
-
-              // 3. Inject a clean, safe style block
-              const cleanStyle = doc.createElement('style');
-              cleanStyle.innerHTML = `
-                * { 
-                  color: #000000 !important; 
-                  border-color: #000000 !important;
-                  box-shadow: none !important;
-                  text-shadow: none !important;
-                  background-image: none !important;
-                }
-                table, td, th { border: 1px solid #000 !important; border-collapse: collapse !important; }
-                h1, h2, h3, h4, h5, h6 { color: #000 !important; }
-              `;
-              doc.head.appendChild(cleanStyle);
-
-              // 4. Scrub all inline styles
-              const allElements = doc.querySelectorAll('*');
-              allElements.forEach(el => {
-                const node = el as HTMLElement;
-                if (node.style) {
-                  node.style.fontVariantLigatures = 'none';
-                }
-                const styleAttr = node.getAttribute('style') || '';
-                if (styleAttr.includes('oklch')) {
-                  node.setAttribute('style', styleAttr.replace(/oklch\([^)]+\)/g, '#888888'));
-                }
-              });
-            } catch (err) {
-              console.warn("Scrubbing failed, but continuing:", err);
-            }
-          };
-
-          const canvas = await html2canvas(exportRef.current, {
-            scale: 4, 
-            useCORS: true,
-            logging: false,
-            allowTaint: true,
-            backgroundColor: '#ffffff',
-            windowWidth: 1200,
-            onclone: (doc) => {
-              scrubOklch(doc);
-              // Force clean styles on the container itself
-              const containerEl = doc.getElementById('export-container');
-              if (containerEl) {
-                containerEl.style.fontFamily = "'Times New Roman', Times, 'Amiri', serif";
-                containerEl.style.backgroundColor = '#ffffff';
-                containerEl.style.color = '#000000';
-              }
-            }
-          });
-          
-          const filename = showAnswers ? `Correction_${exam.title.replace(/\s+/g, '_')}.pdf` : `Examen_${exam.title.replace(/\s+/g, '_')}.pdf`;
-          
-          const el = exportRef.current;
-          if (!el) return;
-
-          // Capture QR Code first if it exists
-          const qrCodeEl = el.querySelector('.qr-code-verification-wrap') as HTMLElement;
-          let qrCodeImgData = '';
-          if (qrCodeEl) {
-            const qrCanvas = await html2canvas(qrCodeEl, { 
-              scale: 3, 
-              backgroundColor: '#ffffff', 
-              logging: false,
-              onclone: (doc) => {
-                scrubOklch(doc);
-              }
-            });
-            qrCodeImgData = qrCanvas.toDataURL('image/png');
-          }
-
-          const pdf = new jsPDF('p', 'mm', 'a4');
-          const pdfWidth = pdf.internal.pageSize.getWidth();
-          const pdfHeight = pdf.internal.pageSize.getHeight();
-          const margin = 12; // Slightly larger margins
-          const contentWidth = pdfWidth - (2 * margin);
-
-          const addPageFooter = (num: number, isLast = false) => {
-            const hasTextFooter = orgSettings?.showFooter !== false;
-
-            if (hasTextFooter) {
-              pdf.setFontSize(8);
-              pdf.setTextColor(150);
-              pdf.text(`${exam.title} - Page ${num}`, margin, pdfHeight - 5);
-              
-              const baseFooter = orgSettings?.footerText || `OFPPT / ${module.code}`;
-              const rightText = isLast 
-                ? `${baseFooter} - Généré le ${new Date().toLocaleDateString()}`
-                : baseFooter;
-              
-              pdf.text(rightText, pdfWidth - margin, pdfHeight - 5, { align: 'right' });
-            }
-            
-            if (qrCodeImgData) {
-              // Add QR code to the bottom center
-              const qrSize = 10;
-              pdf.addImage(qrCodeImgData, 'PNG', (pdfWidth / 2) - (qrSize / 2), pdfHeight - 14, qrSize, qrSize);
-            }
-          };
-
-          // Select all logical blocks to capture separately
-          // This prevents questions from being sliced in half
-          const blocks = Array.from(el.querySelectorAll('.header-table, .metadata-table, .candidate-info-wrap, div[style*="border: 1.5px solid #000"], div[style*="border: 1px solid #000"], .section-header, .question-block, .correction-summary, div[style*="marginTop: 40px"]'));
-          
-          let currentY = margin;
-          let pageCount = 1;
-
-          for (const block of blocks) {
-            const canvas = await html2canvas(block as HTMLElement, {
-              scale: 3, // Higher scale for clarity
-              useCORS: true,
-              logging: false,
-              backgroundColor: '#ffffff',
-              windowWidth: 1200,
-              onclone: (doc) => {
-                scrubOklch(doc);
-              }
-            });
-
-            const imgData = canvas.toDataURL('image/jpeg', 0.95);
-            const imgProps = pdf.getImageProperties(imgData);
-            const imgHeight = (imgProps.height * contentWidth) / imgProps.width;
-
-            const blockEl = block as HTMLElement;
-            const isHeader = blockEl.classList.contains('section-header');
-            
-            // Check if block fits on current page
-            let needsNewPage = (currentY + imgHeight > pdfHeight - 15);
-
-            // Orphan title prevention: If a section header is too close to the bottom of the page
-            // we move it to the next page so it's not separated from the questions it introduces.
-            if (!needsNewPage && isHeader) {
-              // 45mm is a safe heuristic for: Header height (~15mm) + Gap (~10mm) + First question (~20mm)
-              if (currentY + imgHeight + 45 > pdfHeight - 15) {
-                needsNewPage = true;
-              }
-            }
-
-            if (needsNewPage) {
-              // Add Footer and Page Number before adding new page
-              addPageFooter(pageCount);
-
-              pdf.addPage();
-              currentY = margin;
-              pageCount++;
-            }
-
-            pdf.addImage(imgData, 'JPEG', margin, currentY, contentWidth, imgHeight, undefined, 'FAST');
-            
-            // Add spacing after block
-            if (isHeader) {
-              currentY += imgHeight + 8; // Medium gap after header
-            } else if (blockEl.classList.contains('header-table') || blockEl.classList.contains('metadata-table')) {
-              currentY += imgHeight + 6; // Standard gap
-            } else {
-              currentY += imgHeight + 4; // Small gap between questions
-            }
-
-            // If the next sibling is a section header, add extra space before it
-            const nextBlock = blocks[blocks.indexOf(block) + 1] as HTMLElement | undefined;
-            if (nextBlock && nextBlock.classList.contains('section-header')) {
-              currentY += 12; // Extra breathing room before a new section
-            }
-          }
-
-          // Final Footer and Page Number
-          addPageFooter(pageCount, true);
-
-          pdf.save(filename);
-        } catch (err) {
-          console.error("PDF Export failed:", err);
-        } finally {
-          setIsExporting(false);
-          setExportData(null);
-        }
-      }
-    }, 200);
-  };
-
-  const handleExportWord = async (exam: Exam, showAnswers = false) => {
-    const module = modules.find(m => m.id === exam.moduleId);
-    if (!module) return;
-
-    const groupId = exam.groupId || groups.find(g => g.name === exam.groupName)?.id;
-    const group = groups.find(g => g.id === groupId);
-    const filiere = filieres.find(f => f.id === group?.filiereId || module.filiereId);
-    const filiereName = filiere ? `[${filiere.code}] ${filiere.name}` : 'N/A';
-    const filiereLevel = filiere?.niveau || '';
-
-    const totalPoints = exam.questions.reduce((sum, q) => sum + (q.points || 0), 0);
-
-    const groupName = group?.name || exam.groupName || '';
-
     try {
-      await exportExamToWord(
+      setResultsExportData({ exam, results: examResults, module, filiereName, filiereLevel, groupName });
+      // Wait for React to render/mount the results export template in DOM
+      await new Promise(resolve => setTimeout(resolve, 600));
+
+      await generateResultsPDF(
         exam,
+        examResults,
         module,
         filiereName,
-        groupName,
-        totalPoints,
-        showAnswers,
-        orgSettings,
         filiereLevel,
-        user.displayName
+        groupName,
+        orgSettings
       );
     } catch (err) {
-      console.error("Word Export failed:", err);
-      alert("Erreur lors de l'exportation Word.");
+      console.error("Results PDF Export failed:", err);
+      alert("Erreur lors de l'exportation des résultats.");
+    } finally {
+      setResultsExportData(null);
+      setIsExportingResults(false);
+    }
+  };
+
+  const handleExportPDF = (exam: Exam, showAnswers = false) => {
+    setExportConfigModalExam(exam);
+    setExportConfigModalFormat('pdf');
+    setExportConfigModalShowAnswers(showAnswers);
+  };
+
+  const handleExportWord = (exam: Exam, showAnswers = false) => {
+    setExportConfigModalExam(exam);
+    setExportConfigModalFormat('docx');
+    setExportConfigModalShowAnswers(showAnswers);
+  };
+
+  const executeExport = async (options: {
+    templateId: string | 'default';
+    format: 'pdf' | 'docx';
+    showAnswers: boolean;
+    paperSaver: boolean;
+    qcmDoubleColumn?: boolean;
+  }) => {
+    const exam = exportConfigModalExam;
+    if (!exam) return;
+
+    // Close options modal
+    setExportConfigModalExam(null);
+
+    const module = modules.find(m => m.id === exam.moduleId);
+    if (!module) return;
+
+    const groupId = exam.groupId || groups.find(g => g.name === exam.groupName)?.id;
+    const group = groups.find(g => g.id === groupId);
+    const filiere = filieres.find(f => f.id === group?.filiereId || module.filiereId);
+
+    const groupName = group?.name || exam.groupName || '';
+    const filiereName = filiere ? `[${filiere.code}] ${filiere.name}` : 'N/A';
+    const filiereLevel = filiere?.niveau || '';
+
+    // Choose custom template settings if defined
+    let finalSettings = orgSettings;
+    if (options.templateId !== 'default' && orgSettings?.templates) {
+      const template = orgSettings.templates.find(t => t.id === options.templateId);
+      if (template) {
+        finalSettings = {
+          ...orgSettings,
+          headerColumns: template.headerColumns,
+          showHeaderLines: template.showHeaderLines,
+          showFooter: template.showFooter,
+          footerText: template.footerText,
+          footerTable: template.footerTable,
+          footerColumns: template.footerColumns,
+          footerFontSize: template.footerFontSize,
+          footerFontFamily: template.footerFontFamily
+        };
+      }
+    }
+
+    if (options.format === 'pdf') {
+      setIsExporting(true);
+      try {
+        setExportData({ 
+          exam, 
+          module, 
+          filiereName, 
+          filiereLevel, 
+          groupName, 
+          showAnswers: options.showAnswers,
+          paperSaver: options.paperSaver,
+          qcmDoubleColumn: options.qcmDoubleColumn,
+          customSettings: finalSettings
+        });
+        
+        // Wait for React to render/mount the exam export template in DOM
+        await new Promise(resolve => setTimeout(resolve, 800));
+
+        await generateExamPDF(
+          exam,
+          module,
+          filiereName,
+          filiereLevel,
+          groupName,
+          options.showAnswers,
+          finalSettings,
+          user?.displayName || '',
+          options.paperSaver,
+          options.qcmDoubleColumn
+        );
+      } catch (err) {
+         console.error("Exam PDF Export failed:", err);
+         alert("Erreur lors de l'exportation PDF de l'examen.");
+      } finally {
+        setExportData(null);
+        setIsExporting(false);
+      }
+    } else {
+      const totalPoints = exam.questions.reduce((sum, q) => sum + (q.points || 0), 0);
+      try {
+        await exportExamToWord(
+          exam,
+          module,
+          filiereName,
+          groupName,
+          totalPoints,
+          options.showAnswers,
+          finalSettings,
+          filiereLevel,
+          user?.displayName || '',
+          options.paperSaver,
+          options.qcmDoubleColumn
+        );
+      } catch (err) {
+        console.error("Word Export failed:", err);
+        alert("Erreur lors de l'exportation Word.");
+      }
     }
   };
 
@@ -920,7 +804,7 @@ export const TeacherDashboard = ({
     {
       title: 'Suivi & Étudiants',
       items: [
-        { id: 'results', label: 'Résultats', icon: History },
+        { id: 'results', label: 'Suivi & Analyse', icon: TrendingUp },
         { id: 'groups', label: 'Groupes', icon: Users },
       ]
     },
@@ -1064,14 +948,50 @@ export const TeacherDashboard = ({
 
             {activeTab === 'results' && (
               <div className="space-y-8">
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-                  <div>
-                    <h2 className="text-3xl font-black text-slate-900 font-serif italic tracking-tight">Gestion des Résultats</h2>
-                    <p className="text-slate-500 mt-1">Consultez et exportez les performances de tous vos étudiants.</p>
-                  </div>
+                {/* Visual subtab switcher for Suivi & Analyse */}
+                <div className="flex bg-slate-100/80 p-1 rounded-2xl max-w-md shadow-inner border border-slate-200/20">
+                  <button
+                    onClick={() => setResultsMainMode('suivi')}
+                    className={cn(
+                      "flex-1 py-3 px-4 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer",
+                      resultsMainMode === 'suivi'
+                        ? "bg-white text-indigo-600 shadow-md"
+                        : "text-slate-500 hover:text-slate-800"
+                    )}
+                  >
+                    <TrendingUp className="w-4 h-4 text-indigo-600" /> Suivi & Analyses IA
+                  </button>
+                  <button
+                    onClick={() => setResultsMainMode('registry')}
+                    className={cn(
+                      "flex-1 py-3 px-4 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center justify-center gap-2 cursor-pointer",
+                      resultsMainMode === 'registry'
+                        ? "bg-white text-indigo-600 shadow-md"
+                        : "text-slate-500 hover:text-slate-800"
+                    )}
+                  >
+                    <History className="w-4 h-4 text-indigo-600" /> Registre des Copies
+                  </button>
                 </div>
 
-                {statsCards}
+                {resultsMainMode === 'suivi' ? (
+                  <SuiviAnalyseView
+                    modules={modules}
+                    exams={exams}
+                    results={results}
+                    groups={groups}
+                    onRefresh={onRefresh}
+                  />
+                ) : (
+                  <>
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+                      <div>
+                        <h2 className="text-3xl font-black text-slate-900 font-serif italic tracking-tight">Gestion des Résultats</h2>
+                        <p className="text-slate-500 mt-1">Consultez et exportez les performances de tous vos étudiants.</p>
+                      </div>
+                    </div>
+
+                    {statsCards}
 
                 <div className="flex items-center gap-3">
                   <div className="relative hidden md:block">
@@ -1222,23 +1142,132 @@ export const TeacherDashboard = ({
                       )}
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                       <Card className="p-6 bg-indigo-50/50 border-none">
-                         <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mb-2">Copies selectionnées</p>
-                         <h4 className="text-3xl font-black text-indigo-900">{filteredResultsStats.total} / {results.length}</h4>
-                       </Card>
-                       <Card className="p-6 bg-emerald-50/50 border-none">
-                         <p className="text-[10px] font-black text-emerald-400 uppercase tracking-widest mb-2">Taux de Réussite filtré</p>
-                         <h4 className="text-3xl font-black text-emerald-900">
-                           {filteredResultsStats.successPercent}%
-                         </h4>
-                       </Card>
-                       <Card className="p-6 bg-amber-50/50 border-none">
-                         <p className="text-[10px] font-black text-amber-400 uppercase tracking-widest mb-2">Moyenne filtrée</p>
-                         <h4 className="text-3xl font-black text-amber-900">
-                            {filteredResultsStats.avgScore}%
-                         </h4>
-                       </Card>
+                    {selectedExamId && (
+                      <div className="flex bg-slate-100/60 p-1.5 rounded-2xl max-w-sm border border-slate-200/40 shadow-sm mb-6">
+                        <button
+                          onClick={() => setSelectedExamSubTab('copies')}
+                          className={cn(
+                            "flex-1 py-1.5 px-3 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5",
+                            selectedExamSubTab === 'copies'
+                              ? "bg-white text-indigo-600 shadow-sm"
+                              : "text-slate-500 hover:text-slate-700"
+                          )}
+                        >
+                          <History className="w-3.5 h-3.5" /> Copies ({filteredResultsStats.total})
+                        </button>
+                        <button
+                          onClick={() => setSelectedExamSubTab('questions')}
+                          className={cn(
+                            "flex-1 py-1.5 px-3 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all flex items-center justify-center gap-1.5",
+                            selectedExamSubTab === 'questions'
+                              ? "bg-white text-indigo-600 shadow-sm"
+                              : "text-slate-500 hover:text-slate-700"
+                          )}
+                        >
+                          <Target className="w-3.5 h-3.5" /> Analyse Questions
+                        </button>
+                      </div>
+                    )}
+
+                    {(!selectedExamId || selectedExamSubTab === 'copies') ? (
+                      <>
+                        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                      {/* Left: Metric analysis cards */}
+                      <div className="lg:col-span-5 grid grid-cols-2 gap-4">
+                        <Card className="p-5 bg-indigo-50/40 border border-indigo-100/30 flex flex-col justify-between">
+                          <p className="text-[9px] font-black text-indigo-500 uppercase tracking-widest">Copies Filtrées</p>
+                          <div className="mt-4">
+                            <h4 className="text-2xl font-black text-indigo-900 tracking-tight">{filteredResultsStats.total} <span className="text-indigo-400 text-xs font-normal">/ {results.length}</span></h4>
+                            <p className="text-[9px] font-bold text-indigo-400 mt-1">Copies dans le filtre</p>
+                          </div>
+                        </Card>
+
+                        <Card className="p-5 bg-emerald-50/40 border border-emerald-100/30 flex flex-col justify-between">
+                          <p className="text-[9px] font-black text-emerald-500 uppercase tracking-widest">Taux de Réussite</p>
+                          <div className="mt-4">
+                            <h4 className="text-2xl font-black text-emerald-900 tracking-tight">{filteredResultsStats.successPercent}%</h4>
+                            <div className="w-full bg-emerald-100/55 h-1 rounded-full overflow-hidden mt-2">
+                              <div className="bg-emerald-500 h-full rounded-full" style={{ width: `${filteredResultsStats.successPercent}%` }} />
+                            </div>
+                          </div>
+                        </Card>
+
+                        <Card className="p-5 bg-amber-50/40 border border-amber-100/30 flex flex-col justify-between">
+                          <p className="text-[9px] font-black text-amber-500 uppercase tracking-widest">Moyenne Filtrée</p>
+                          <div className="mt-4">
+                            <h4 className="text-2xl font-black text-amber-900 tracking-tight">{filteredResultsStats.avgScore}%</h4>
+                            <p className="text-[9px] font-bold text-amber-500 mt-1">Note médiane : <span className="font-extrabold">{filteredResultsStats.medianScore}%</span></p>
+                          </div>
+                        </Card>
+
+                        <Card className="p-5 bg-slate-50/50 border border-slate-200/40 flex flex-col justify-between">
+                          <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Val. Extrêmes (Min ↔ Max)</p>
+                          <div className="mt-4">
+                            <h4 className="text-xl font-black text-slate-800 tracking-tight">
+                              {filteredResultsStats.minScore}% <span className="text-slate-400 font-bold mx-0.5">↔</span> {filteredResultsStats.maxScore}%
+                            </h4>
+                            <p className="text-[9px] font-bold text-slate-400 mt-1">Écart de niveau constaté</p>
+                          </div>
+                        </Card>
+                      </div>
+
+                      {/* Right: Score distribution visualizer */}
+                      <Card className="lg:col-span-7 p-6 border-2 border-slate-100 flex flex-col justify-between shadow-sm">
+                        <div>
+                          <div className="flex items-center justify-between mb-4">
+                            <h4 className="text-xs font-black text-slate-800 uppercase tracking-widest flex items-center gap-2">
+                              <BarChart className="w-4 h-4 text-indigo-500 hover:rotate-12 transition-transform" /> Distribution des Performances
+                            </h4>
+                            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Histogramme</span>
+                          </div>
+
+                          <div className="space-y-3.5">
+                            {/* Excellent */}
+                            <div>
+                              <div className="flex justify-between text-[10px] font-bold text-slate-600 mb-1">
+                                <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-md bg-emerald-500 block" /> Excellent (≥ 80%)</span>
+                                <span className="font-mono text-slate-500">{filteredResultsStats.distribution.excellent} copies ({filteredResultsStats.total > 0 ? Math.round(filteredResultsStats.distribution.excellent / filteredResultsStats.total * 100) : 0}%)</span>
+                              </div>
+                              <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                                <div className="bg-emerald-500 h-full rounded-full transition-all duration-500" style={{ width: `${filteredResultsStats.total > 0 ? (filteredResultsStats.distribution.excellent / filteredResultsStats.total * 100) : 0}%` }} />
+                              </div>
+                            </div>
+
+                            {/* Good */}
+                            <div>
+                              <div className="flex justify-between text-[10px] font-bold text-slate-600 mb-1">
+                                <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-md bg-indigo-500 block" /> Bien / Satisfaisant (60% - 79%)</span>
+                                <span className="font-mono text-slate-500">{filteredResultsStats.distribution.good} copies ({filteredResultsStats.total > 0 ? Math.round(filteredResultsStats.distribution.good / filteredResultsStats.total * 100) : 0}%)</span>
+                              </div>
+                              <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                                <div className="bg-indigo-500 h-full rounded-full transition-all duration-500" style={{ width: `${filteredResultsStats.total > 0 ? (filteredResultsStats.distribution.good / filteredResultsStats.total * 100) : 0}%` }} />
+                              </div>
+                            </div>
+
+                            {/* Pass */}
+                            <div>
+                              <div className="flex justify-between text-[10px] font-bold text-slate-600 mb-1">
+                                <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-md bg-amber-500 block" /> Passable (50% - 59%)</span>
+                                <span className="font-mono text-slate-500">{filteredResultsStats.distribution.pass} copies ({filteredResultsStats.total > 0 ? Math.round(filteredResultsStats.distribution.pass / filteredResultsStats.total * 100) : 0}%)</span>
+                              </div>
+                              <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                                <div className="bg-amber-500 h-full rounded-full transition-all duration-500" style={{ width: `${filteredResultsStats.total > 0 ? (filteredResultsStats.distribution.pass / filteredResultsStats.total * 100) : 0}%` }} />
+                              </div>
+                            </div>
+
+                            {/* Fail */}
+                            <div>
+                              <div className="flex justify-between text-[10px] font-bold text-slate-600 mb-1">
+                                <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-md bg-rose-500 block" /> En difficulté (&lt; 50%)</span>
+                                <span className="font-mono text-slate-500">{filteredResultsStats.distribution.fail} copies ({filteredResultsStats.total > 0 ? Math.round(filteredResultsStats.distribution.fail / filteredResultsStats.total * 100) : 0}%)</span>
+                              </div>
+                              <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                                <div className="bg-rose-500 h-full rounded-full transition-all duration-500" style={{ width: `${filteredResultsStats.total > 0 ? (filteredResultsStats.distribution.fail / filteredResultsStats.total * 100) : 0}%` }} />
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </Card>
                     </div>
 
                     <div className="bg-white rounded-[2.5rem] border-2 border-slate-100 shadow-soft overflow-hidden">
@@ -1246,10 +1275,35 @@ export const TeacherDashboard = ({
                         <table className="w-full">
                           <thead>
                             <tr className="bg-slate-50/50 border-b-2 border-slate-100 font-display">
-                              <th className="px-8 py-5 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Étudiant</th>
-                              <th className="px-8 py-5 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest">Examen & Module</th>
-                              <th className="px-8 py-5 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest">Score %</th>
-                              <th className="px-8 py-5 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest">Note brute</th>
+                              <th 
+                                onClick={() => handleSort('name')}
+                                className="px-8 py-5 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest cursor-pointer select-none hover:text-indigo-600 transition-colors group"
+                              >
+                                Étudiant 
+                                <SortIcon field="name" />
+                              </th>
+                              <th 
+                                onClick={() => handleSort('date')}
+                                className="px-8 py-5 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest cursor-pointer select-none hover:text-indigo-600 transition-colors group"
+                              >
+                                Examen & Module
+                                <SortIcon field="date" />
+                              </th>
+                              <th 
+                                onClick={() => handleSort('score')}
+                                className="px-8 py-5 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest cursor-pointer select-none hover:text-indigo-600 transition-colors group"
+                              >
+                                Score %
+                                <SortIcon field="score" />
+                              </th>
+                              <th 
+                                onClick={() => handleSort('score')}
+                                className="px-8 py-5 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest cursor-pointer select-none hover:text-indigo-600 transition-colors group"
+                              >
+                                Note brute
+                                <SortIcon field="score" />
+                              </th>
+                              <th className="px-8 py-5 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest">Intégrité</th>
                               <th className="px-8 py-5 text-right text-[10px] font-black text-slate-400 uppercase tracking-widest">Détails</th>
                             </tr>
                           </thead>
@@ -1281,7 +1335,14 @@ export const TeacherDashboard = ({
                                               {result.studentName?.[0]}
                                             </div>
                                             <div>
-                                              <p className="font-black text-slate-900 group-hover:text-indigo-600 transition-colors uppercase tracking-tight text-xs">{result.studentName}</p>
+                                              <p className="font-black text-slate-900 group-hover:text-indigo-600 transition-colors uppercase tracking-tight text-xs flex items-center gap-1.5">
+                                                {result.studentName}
+                                                {percentVal === filteredResultsStats.maxScore && (
+                                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-amber-50 border border-amber-200 text-amber-700 text-[8px] font-black uppercase rounded-md tracking-wider">
+                                                    <Trophy className="w-2.5 h-2.5 text-amber-500 fill-amber-300" /> Major
+                                                  </span>
+                                                )}
+                                              </p>
                                               <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">{result.groupName}</p>
                                             </div>
                                           </div>
@@ -1309,6 +1370,23 @@ export const TeacherDashboard = ({
                                           <span className="px-3 py-1 bg-slate-50 border border-slate-100 rounded-lg text-xs font-black text-slate-600">
                                             {formatScore(result.score)} <span className="text-slate-300">/ {result.totalPoints}</span>
                                           </span>
+                                        </td>
+                                        <td className="px-8 py-5 text-center">
+                                          {(() => {
+                                            const integrity = result.integrityScore !== undefined ? result.integrityScore : 100;
+                                            return (
+                                              <span className={cn(
+                                                "px-2.5 py-1 text-[10px] font-black uppercase tracking-wider rounded-lg border",
+                                                integrity >= 90
+                                                  ? "bg-emerald-50 border-emerald-100 text-emerald-600"
+                                                  : integrity >= 70
+                                                    ? "bg-amber-50 border-amber-100 text-amber-600"
+                                                    : "bg-rose-50 border-rose-100 text-rose-600"
+                                              )}>
+                                                {integrity}%
+                                              </span>
+                                            );
+                                          })()}
                                         </td>
                                         <td className="px-8 py-5 text-right">
                                           {exam && (
@@ -1363,7 +1441,226 @@ export const TeacherDashboard = ({
                         </table>
                       </div>
                     </div>
+                    </>
+                    ) : (
+                      <motion.div 
+                        initial={{ opacity: 0, y: 15 }} 
+                        animate={{ opacity: 1, y: 0 }} 
+                        transition={{ duration: 0.35 }}
+                        className="space-y-8"
+                      >
+                        {(() => {
+                          const easiestQIdx = questionStats.length > 0 
+                            ? [...questionStats].sort((a,b) => b.avgScorePct - a.avgScorePct)[0]?.index 
+                            : null;
+                          const hardestQIdx = questionStats.length > 0 
+                            ? [...questionStats].sort((a,b) => a.avgScorePct - b.avgScorePct)[0]?.index 
+                            : null;
+                          const avgConceptPct = questionStats.length > 0 
+                            ? Math.round(questionStats.reduce((acc, q) => acc + q.avgScorePct, 0) / questionStats.length) 
+                            : 0;
+
+                          const criticalQs = questionStats.filter(q => q.avgScorePct < 55);
+
+                          if (questionStats.length === 0) {
+                            return (
+                              <div className="p-12 text-center text-slate-400 font-bold bg-slate-50 rounded-[2rem] border-2 border-dashed border-slate-200">
+                                <ClipboardList className="w-12 h-12 mx-auto mb-4 opacity-20" />
+                                <p>Aucune donnée analytique disponible pour cet examen.</p>
+                              </div>
+                            );
+                          }
+
+                          return (
+                            <>
+                              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                <Card className="p-6 bg-emerald-50/40 border border-emerald-100/30 flex flex-col justify-between">
+                                  <p className="text-[9px] font-black text-emerald-500 uppercase tracking-widest">Question la plus simple</p>
+                                  <div className="mt-4 border-t border-emerald-100/20 pt-4">
+                                    <h4 className="text-2xl font-black text-emerald-950">
+                                      {easiestQIdx !== null ? `Question ${easiestQIdx + 1}` : 'N/A'}
+                                    </h4>
+                                    <p className="text-[10px] font-bold text-emerald-600 mt-2">
+                                      {easiestQIdx !== null ? `${questionStats[easiestQIdx].avgScorePct}% d'assimilation` : ''}
+                                    </p>
+                                  </div>
+                                </Card>
+
+                                <Card className="p-6 bg-rose-50/40 border border-rose-100/30 flex flex-col justify-between">
+                                  <p className="text-[9px] font-black text-rose-500 uppercase tracking-widest">Question la plus difficile</p>
+                                  <div className="mt-4 border-t border-rose-100/20 pt-4">
+                                    <h4 className="text-2xl font-black text-rose-950">
+                                      {hardestQIdx !== null ? `Question ${hardestQIdx + 1}` : 'N/A'}
+                                    </h4>
+                                    <p className="text-[10px] font-bold text-rose-600 mt-2">
+                                      {hardestQIdx !== null ? `${questionStats[hardestQIdx].avgScorePct}% d'assimilation` : ''}
+                                    </p>
+                                  </div>
+                                </Card>
+
+                                <Card className="p-6 bg-slate-50/50 border border-slate-200/40 flex flex-col justify-between">
+                                  <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Réussite Globale</p>
+                                  <div className="mt-4 border-t border-slate-200/20 pt-4">
+                                    <h4 className="text-2xl font-black text-slate-800 font-sans tracking-tight">
+                                      {avgConceptPct}%
+                                    </h4>
+                                    <p className="text-[10px] font-bold text-slate-400 mt-2">Moyenne de maîtrise des concepts</p>
+                                  </div>
+                                </Card>
+                              </div>
+
+                              {criticalQs.length > 0 && (
+                                <Card className="p-6 bg-amber-50/60 border-2 border-amber-200/55 rounded-[2rem] flex items-start gap-4">
+                                  <div className="p-2.5 bg-amber-100 text-amber-700 rounded-xl shrink-0">
+                                    <AlertTriangle className="w-5 h-5" />
+                                  </div>
+                                  <div className="space-y-1">
+                                    <h5 className="font-black text-amber-900 text-xs uppercase tracking-wider">Alerte d'assimilation ({criticalQs.length} question(s) critique(s))</h5>
+                                    <p className="text-xs text-amber-700 font-bold leading-relaxed">
+                                      Certains concepts font l'objet de difficultés récurrentes (taux de réussite &lt; 55%). Nous vous recommandons de revoir les questions : {criticalQs.map(q => `Q${q.index + 1}`).join(', ')}.
+                                    </p>
+                                  </div>
+                                </Card>
+                              )}
+
+                              <div className="space-y-4">
+                                <div className="flex items-center justify-between px-2">
+                                  <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Diagnostic par Question</h4>
+                                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest font-mono">Taux de validation</span>
+                                </div>
+
+                                {questionStats.map((stat, sIdx) => {
+                                  const isExpanded = expandedQuestionIdx === sIdx;
+                                  return (
+                                    <Card key={sIdx} className="p-6 border-2 border-slate-100 hover:border-slate-200/60 transition-all rounded-[2rem]">
+                                      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                                        <div className="space-y-2 flex-1 min-w-0">
+                                          <div className="flex items-center gap-2">
+                                            <span className="text-[9px] font-black px-2.5 py-0.5 bg-indigo-50 text-indigo-600 rounded-lg uppercase tracking-wider">
+                                              Q{stat.index + 1}
+                                            </span>
+                                            <span className="text-[9px] font-black px-2 py-0.5 bg-slate-100 text-slate-500 rounded uppercase tracking-wider">
+                                              {stat.type}
+                                            </span>
+                                            <span className="text-[9px] font-bold text-slate-400">
+                                              {stat.points} PTS
+                                            </span>
+                                          </div>
+                                          <div 
+                                            className="font-bold text-slate-800 leading-relaxed text-xs line-clamp-1" 
+                                            dangerouslySetInnerHTML={{ __html: stat.questionText }} 
+                                          />
+                                        </div>
+
+                                        <div className="flex items-center gap-6 shrink-0">
+                                          <div className="space-y-1 text-right">
+                                            <p className="text-xs font-black text-slate-900">{stat.avgScorePct}% réussite</p>
+                                            <p className="text-[9px] font-bold text-slate-400 font-mono">
+                                              {stat.correctCount} / {stat.correctCount + stat.partialCount + stat.incorrectCount} correct
+                                            </p>
+                                          </div>
+
+                                          <div className="w-24 h-3 bg-slate-100 rounded-full overflow-hidden flex shadow-inner">
+                                            {stat.successPercent > 0 && (
+                                              <div 
+                                                className="bg-emerald-500 h-full" 
+                                                style={{ width: `${stat.successPercent}%` }} 
+                                                title={`Favorable: ${stat.successPercent}%`}
+                                              />
+                                            )}
+                                            {stat.partialPercent > 0 && (
+                                              <div 
+                                                className="bg-amber-500 h-full" 
+                                                style={{ width: `${stat.partialPercent}%` }} 
+                                                title={`Partiel: ${stat.partialPercent}%`}
+                                              />
+                                            )}
+                                            {stat.incorrectPercent > 0 && (
+                                              <div 
+                                                className="bg-rose-500 h-full" 
+                                                style={{ width: `${stat.incorrectPercent}%` }} 
+                                                title={`Incorrect: ${stat.incorrectPercent}%`}
+                                              />
+                                            )}
+                                          </div>
+
+                                          <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            onClick={() => setExpandedQuestionIdx(isExpanded ? null : sIdx)}
+                                            className="text-[9px] font-black uppercase text-indigo-600 hover:bg-indigo-50 hover:text-indigo-700 h-8 px-3 rounded-xl border border-transparent hover:border-indigo-100/30"
+                                          >
+                                            {isExpanded ? 'Masquer' : 'Détails'}
+                                          </Button>
+                                        </div>
+                                      </div>
+
+                                      {isExpanded && (
+                                        <div className="mt-5 pt-5 border-t border-slate-100 space-y-4">
+                                          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                            <div className="space-y-2">
+                                              <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Contenu de la question</p>
+                                              <div 
+                                                className="p-4 bg-slate-50/50 rounded-2xl text-xs font-bold text-slate-700 leading-relaxed border border-slate-100" 
+                                                dangerouslySetInnerHTML={{ __html: stat.questionText }} 
+                                              />
+                                            </div>
+
+                                            <div className="space-y-2">
+                                              <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Diagnostic d'assimilation</p>
+                                              <div className="p-4 bg-indigo-50/20 border border-indigo-100/40 rounded-2xl text-xs text-indigo-900 leading-relaxed space-y-3">
+                                                <div className="flex justify-between items-center pb-2 border-b border-indigo-100/20">
+                                                  <span className="font-bold flex items-center gap-1.5"><span className="w-2 h-2 rounded bg-emerald-500" /> Parfait (100% des points)</span>
+                                                  <span className="font-mono font-black text-emerald-600">{stat.correctCount} élève(s)</span>
+                                                </div>
+                                                {stat.partialPercent > 0 && (
+                                                  <div className="flex justify-between items-center pb-2 border-b border-indigo-100/20">
+                                                    <span className="font-bold flex items-center gap-1.5"><span className="w-2 h-2 rounded bg-amber-500" /> Partiel (Points partiels)</span>
+                                                    <span className="font-mono font-black text-amber-600">{stat.partialCount} élève(s)</span>
+                                                  </div>
+                                                )}
+                                                <div className="flex justify-between items-center">
+                                                  <span className="font-bold flex items-center gap-1.5"><span className="w-2 h-2 rounded bg-rose-500" /> Échec (0 point)</span>
+                                                  <span className="font-mono font-black text-rose-600">{stat.incorrectCount} élève(s)</span>
+                                                </div>
+                                              </div>
+                                            </div>
+                                          </div>
+
+                                          {stat.strugglingStudents.length > 0 ? (
+                                            <div className="space-y-2.5">
+                                              <p className="text-[9px] font-black text-amber-600 uppercase tracking-widest">Étudiants à accompagner pour ce concept ({stat.strugglingStudents.length})</p>
+                                              <div className="flex flex-wrap gap-2">
+                                                {stat.strugglingStudents.map((stud, sNewIdx) => (
+                                                  <div key={sNewIdx} className="inline-flex items-center gap-2 px-3 py-1.5 bg-amber-50/50 border border-amber-200/50 rounded-xl" title={stud.email}>
+                                                    <div className="w-5 h-5 rounded-md bg-amber-100 text-[9px] font-black text-amber-700 flex items-center justify-center">
+                                                      {stud.name[0]}
+                                                    </div>
+                                                    <span className="text-xs font-bold text-slate-700">{stud.name}</span>
+                                                    <span className="text-[8px] font-black uppercase text-amber-600 bg-amber-100/40 px-1.5 rounded">{stud.group}</span>
+                                                  </div>
+                                                ))}
+                                              </div>
+                                            </div>
+                                          ) : (
+                                            <div className="p-3 bg-emerald-50 text-emerald-800 text-xs font-bold rounded-xl border border-emerald-100/35">
+                                              🎉 Aucun élève n'est resté en situation de blocage total sur cette question !
+                                            </div>
+                                          )}
+                                        </div>
+                                      )}
+                                    </Card>
+                                  );
+                                })}
+                              </div>
+                            </>
+                          );
+                        })()}
+                      </motion.div>
+                    )}
                   </div>
+                )}
+                  </>
                 )}
               </div>
             )}
@@ -1383,34 +1680,16 @@ export const TeacherDashboard = ({
                   {notifications.length === 0 ? (
                     <EmptyState message="Aucune annonce publiée." />
                   ) : (
-                    notifications.map(notif => {
-                      const targetGroup = notif.groupId ? groups.find(g => g.id === notif.groupId) : null;
-                      return (
-                        <Card key={notif.id} className="p-8 border-none shadow-xl shadow-slate-200/40 relative group overflow-hidden rounded-[2.5rem]">
-                          <div className="absolute top-0 right-0 p-8 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <Button variant="ghost" size="sm" className="text-rose-500 hover:bg-rose-50 rounded-xl" onClick={async () => {
-                              if(confirm("Supprimer cette annonce ?")) {
-                                await api.notifications.delete(notif.id);
-                                onRefresh();
-                              }
-                            }}>
-                              <Trash2 className="w-4 h-4" />
-                            </Button>
-                          </div>
-                          <div className="flex items-center gap-3 mb-4">
-                             <div className={cn(
-                               "px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-[0.2em]",
-                               targetGroup ? "bg-amber-50 text-amber-600" : "bg-emerald-50 text-emerald-600"
-                             )}>
-                               {targetGroup ? `Groupe: ${targetGroup.name}` : 'Annonce Globale'}
-                             </div>
-                             <span className="text-xs text-slate-400 font-bold">{new Date(notif.createdAt).toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' })}</span>
-                          </div>
-                          <h4 className="text-2xl font-black text-slate-900 mb-4 tracking-tight uppercase group-hover:text-indigo-600 transition-colors">{notif.title}</h4>
-                          <div className="prose prose-slate max-w-none text-slate-600 font-medium leading-loose" dangerouslySetInnerHTML={{ __html: notif.content }} />
-                        </Card>
-                      );
-                    })
+                    notifications.map(notif => (
+                      <DetailedNotificationCard 
+                        key={notif.id} 
+                        notification={notif} 
+                        user={user} 
+                        groups={groups}
+                        filieres={filieres}
+                        onRefresh={onRefresh} 
+                      />
+                    ))
                   )}
                 </div>
               </div>
@@ -1431,6 +1710,8 @@ export const TeacherDashboard = ({
             {activeTab === 'ai' && (
               <AiAssistantView 
                 modules={modules} 
+                groups={groups}
+                filieres={filieres}
                 onRefresh={onRefresh} 
                 onSelectTab={setActiveTab} 
               />
@@ -1509,9 +1790,20 @@ export const TeacherDashboard = ({
         {isAddingNotification && (
           <Modal title="Publier une Annonce" onClose={() => setIsAddingNotification(false)}>
              <div className="p-5 sm:p-8">
-               <AddNotificationForm user={user} groups={groups} onComplete={() => { setIsAddingNotification(false); onRefresh(); }} />
+               <AddNotificationForm user={user} groups={groups} filieres={filieres} onComplete={() => { setIsAddingNotification(false); onRefresh(); }} />
              </div>
           </Modal>
+        )}
+        {exportConfigModalExam && (
+          <ExportModelModal
+            exam={exportConfigModalExam}
+            templates={orgSettings?.templates || []}
+            defaultSettings={orgSettings}
+            initialFormat={exportConfigModalFormat}
+            initialShowAnswers={exportConfigModalShowAnswers}
+            onClose={() => setExportConfigModalExam(null)}
+            onExport={executeExport}
+          />
         )}
       </AnimatePresence>
 
@@ -1535,7 +1827,9 @@ export const TeacherDashboard = ({
             filiereLevel={exportData.filiereLevel}
             groupName={exportData.groupName}
             showAnswers={exportData.showAnswers}
-            settings={orgSettings}
+            paperSaver={exportData.paperSaver}
+            qcmDoubleColumn={exportData.qcmDoubleColumn}
+            settings={exportData.customSettings || orgSettings}
             teacherName={user.displayName}
           />
         )}

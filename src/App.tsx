@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   LogOut, 
@@ -14,7 +14,7 @@ import {
   Sparkles,
   Settings
 } from 'lucide-react';
-import { api, socket } from './lib/api';
+import { api, socket, setOnDualSessionDetected } from './lib/api';
 import { cn } from './lib/utils';
 import { UserProfile, Module, Exam, Result, Notification, Filiere, Group } from './types';
 
@@ -28,6 +28,8 @@ import { ExamView } from './components/views/ExamView';
 import { AuthView } from './components/views/AuthView';
 import { ProfileModal } from './components/modals/ProfileModal';
 import { NotificationsDropdown } from './components/NotificationsDropdown';
+import { OnlineUsersDropdown } from './components/OnlineUsersDropdown';
+import { ChatWidget } from './components/ChatWidget';
 import { Modal } from './components/ui/Modal';
 import { AddNotificationForm } from './components/forms/AddNotificationForm';
 import { Toaster } from 'react-hot-toast';
@@ -47,6 +49,7 @@ export default function App() {
   } = useAppStore();
 
   const [showProfileModal, setShowProfileModal] = useState(false);
+  const [showDualSessionModal, setShowDualSessionModal] = useState(false);
   const [isAddingNotification, setIsAddingNotification] = useState(false);
   const [activeTeacherTab, setActiveTeacherTab] = useState<string>('overview');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -59,6 +62,7 @@ export default function App() {
   const [filieres, setFilieres] = useState<Filiere[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
   const [studentCount, setStudentCount] = useState(0);
+  const [onlineUsers, setOnlineUsers] = useState<any[]>([]);
 
   const fetchData = useCallback(async () => {
     if (!user) return;
@@ -105,9 +109,58 @@ export default function App() {
     }
   }, [user]);
 
+  const lastFetchTimeRef = useRef<number>(0);
+
+  const fetchOnlineUsers = useCallback(async () => {
+    if (!user) return;
+    
+    // Only fetch if the page is currently active and visible to avoid resource consumption
+    if (document.hidden || document.visibilityState !== 'visible') {
+      return;
+    }
+
+    // Rate-limiting check: throttle background polling to at most once per 20 seconds
+    const now = Date.now();
+    if (now - lastFetchTimeRef.current < 20000) {
+      return;
+    }
+
+    lastFetchTimeRef.current = now;
+
+    try {
+      const data = await api.admin.getOnlineUsers();
+      setOnlineUsers(data || []);
+    } catch (err: any) {
+      // Background polling: gracefully silence network, rate limits or session errors
+      console.debug("Quietly handled online users fetch error in app level:", err?.message || err);
+    }
+  }, [user]);
+
   useEffect(() => {
     checkAuth();
   }, [checkAuth]);
+
+  useEffect(() => {
+    setOnDualSessionDetected(() => {
+      setShowDualSessionModal(true);
+      setUser(null);
+    });
+    return () => {
+      setOnDualSessionDetected(() => {});
+    };
+  }, [setUser]);
+
+  useEffect(() => {
+    if (user) {
+      // Fetch initially without hitting the 20-second threshold block (since lastFetchTimeRef starts at 0)
+      fetchOnlineUsers();
+      
+      const interval = setInterval(() => {
+        fetchOnlineUsers();
+      }, 30000);
+      return () => clearInterval(interval);
+    }
+  }, [user, fetchOnlineUsers]);
 
   useEffect(() => {
     if (user) {
@@ -177,6 +230,8 @@ export default function App() {
               </div>
 
               <div className="flex items-center gap-4">
+                <OnlineUsersDropdown onlineUsers={onlineUsers} />
+                
                 <NotificationsDropdown 
                   notifications={notifications} 
                   user={user}
@@ -409,7 +464,11 @@ export default function App() {
                   exams={exams} 
                   results={results} 
                   modules={modules}
+                  notifications={notifications}
                   user={user}
+                  groups={groups}
+                  filieres={filieres}
+                  onRefresh={fetchData}
                   onStartExam={(exam) => {
                     setActiveExam(exam);
                     setView('exam');
@@ -448,6 +507,8 @@ export default function App() {
       
       <Toaster position="top-right" />
       
+      <ChatWidget user={user} />
+      
       {showProfileModal && (
         <ProfileModal 
           user={user} 
@@ -459,8 +520,38 @@ export default function App() {
       {isAddingNotification && (
         <Modal title="Publier une Annonce" onClose={() => setIsAddingNotification(false)}>
            <div className="p-5 sm:p-8">
-             <AddNotificationForm user={user} groups={groups} onComplete={() => { setIsAddingNotification(false); fetchData(); }} />
+             <AddNotificationForm user={user} groups={groups} filieres={filieres} onComplete={() => { setIsAddingNotification(false); fetchData(); }} />
            </div>
+        </Modal>
+      )}
+
+      {showDualSessionModal && (
+        <Modal 
+          title="Session Multiples Interdites" 
+          onClose={() => {
+            setShowDualSessionModal(false);
+            window.location.reload();
+          }}
+        >
+          <div className="p-6 text-center space-y-4">
+            <div className="w-16 h-16 bg-rose-100 rounded-full flex items-center justify-center mx-auto text-rose-600 animate-pulse">
+              <LogOut className="w-8 h-8" />
+            </div>
+            <h3 className="text-lg font-black text-rose-900">Déconnexion de sécurité</h3>
+            <p className="text-sm text-slate-600 leading-relaxed">
+              Une nouvelle session de connexion a été ouverte sur un autre appareil ou navigateur avec vos identifiants. 
+              <strong> Conformément aux règles de sécurité, vous avez été déconnecté automatiquement.</strong>
+            </p>
+            <Button 
+              className="w-full bg-rose-600 hover:bg-rose-700 text-white font-bold py-3 text-xs uppercase"
+              onClick={() => {
+                setShowDualSessionModal(false);
+                window.location.reload();
+              }}
+            >
+              Se Reconnecter
+            </Button>
+          </div>
         </Modal>
       )}
     </div>

@@ -86,3 +86,15 @@ export const formatDuration = (minutes: number) => {
   }
   return `${m}min`;
 };
+
+export const getLineImageUrl = (line: any, settings: any): string => {
+  if (!line || line.type !== 'image') return '';
+  if (line.logoSource === 'gauche') {
+    return settings?.orgLogoUrl || line.imageUrl || '';
+  }
+  if (line.logoSource === 'droit') {
+    return settings?.orgLogoUrlRight || settings?.orgLogoUrl || line.imageUrl || '';
+  }
+  // fallback / default behaviour
+  return line.imageUrl || '';
+};

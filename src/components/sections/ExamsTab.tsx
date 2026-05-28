@@ -202,31 +202,27 @@ export const ExamsTab = ({
 
                     <div className="mt-auto space-y-4">
                       <div className="pt-4 border-t-2 border-slate-50 flex flex-wrap items-center justify-between gap-4">
-                        <div className="flex bg-slate-50 border border-slate-100 p-1 rounded-2xl shrink-0">
-                          <div className="flex">
-                            <Button variant="ghost" size="sm" onClick={() => handleExportPDF(exam, false)} className="h-8 w-8 p-0 text-slate-400 hover:text-indigo-600 hover:bg-white rounded-xl transition-all" title="PDF">
-                              <FileDown className="w-3.5 h-3.5" />
-                            </Button>
-                            <Button variant="ghost" size="sm" onClick={() => handleExportWord(exam, false)} className="h-8 w-8 p-0 text-slate-400 hover:text-blue-600 hover:bg-white rounded-xl transition-all" title="Word">
-                              <FileText className="w-3.5 h-3.5" />
-                            </Button>
-                          </div>
-                          <div className="w-px h-3.5 bg-slate-200 self-center mx-1" />
-                          <div className="flex">
-                            <Button variant="ghost" size="sm" onClick={() => handleExportPDF(exam, true)} className="h-8 w-8 p-0 text-slate-400 hover:text-emerald-600 hover:bg-white rounded-xl transition-all" title="Corrigé PDF">
-                              <CheckCircle2 className="w-3.5 h-3.5" />
-                            </Button>
-                            <Button variant="ghost" size="sm" onClick={() => handleExportWord(exam, true)} className="h-8 w-8 p-0 text-slate-400 hover:text-emerald-500 hover:bg-white rounded-xl transition-all" title="Corrigé Word">
-                              <Sparkles className="w-3.5 h-3.5" />
-                            </Button>
-                          </div>
+                        <div className="flex items-center gap-2">
+                          <Button 
+                            variant="primary" 
+                            size="sm" 
+                            onClick={() => handleExportPDF(exam, false)} 
+                            className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl text-xs flex items-center gap-1.5 px-3 h-9 shadow-sm transition-all"
+                          >
+                            <FileDown className="w-3.5 h-3.5" />
+                            Exporter l'examen
+                          </Button>
                           {examResults.length > 0 && (
-                            <>
-                              <div className="w-px h-3.5 bg-slate-200 self-center mx-1" />
-                              <Button variant="ghost" size="sm" onClick={() => handleExportResultsPDF(exam)} className="h-8 w-8 p-0 text-violet-500 hover:bg-white rounded-xl transition-all" title="Exporter les Résultats (PDF)">
-                                <Users className="w-3.5 h-3.5" />
-                              </Button>
-                            </>
+                            <Button 
+                              variant="outline" 
+                              size="sm" 
+                              onClick={() => handleExportResultsPDF(exam)} 
+                              className="border-slate-200 text-slate-600 hover:text-indigo-600 hover:bg-slate-50 font-semibold rounded-xl text-xs flex items-center gap-1.5 px-3 h-9 transition-all"
+                              title="Exporter les Résultats (PDF)"
+                            >
+                              <Users className="w-3.5 h-3.5 text-slate-400" />
+                              Résultats (.pdf)
+                            </Button>
                           )}
                         </div>
 

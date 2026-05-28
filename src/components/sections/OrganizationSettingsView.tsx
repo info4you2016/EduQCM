@@ -9,6 +9,120 @@ import {
   Image as ImageIcon, Columns as ColumnsIcon, Layout as LayoutIcon, AlignLeft, AlignCenter, AlignRight, Clock 
 } from 'lucide-react';
 import { Button } from '../ui/Button';
+import { getLineImageUrl } from '../../lib/utils';
+
+const HEADER_PRESETS = [
+  {
+    id: 'preset-ofppt-classic',
+    name: 'OFPPT National Classique',
+    description: 'Structure officielle tripartite avec logos latéraux, texte arabe en police Amiri et détails français pour les examens de fin de module.',
+    headerColumns: [
+      {
+        id: 'col-pres-ofppt-1',
+        width: 15,
+        borderRight: true,
+        lines: [
+          { id: 'pres-ofppt-logo-l', type: 'image', imageUrl: 'https://upload.wikimedia.org/wikipedia/commons/thumb/e/e0/OFPPT_Logo.svg/1200px-OFPPT_Logo.svg.png', logoSource: 'gauche', alignment: 'center', imageWidth: 45, imageHeight: 45 }
+        ]
+      },
+      {
+        id: 'col-pres-ofppt-2',
+        width: 70,
+        borderRight: true,
+        lines: [
+          { id: 'pres-ofppt-line-1', type: 'text', text: '{{ORG_AR}}', fontSize: 13, isBold: true, alignment: 'center', fontFamily: 'Amiri, serif' },
+          { id: 'pres-ofppt-line-2', type: 'text', text: '{{ORG_FR}}', fontSize: 9, isBold: true, alignment: 'center', fontFamily: 'Inter, sans-serif' },
+          { id: 'pres-ofppt-line-3', type: 'text', text: '{{DIRECTION}}', fontSize: 9, isBold: false, alignment: 'center', fontFamily: 'Inter, sans-serif' },
+          { id: 'pres-ofppt-line-4', type: 'text', text: '{{ETABLISSEMENT}}', fontSize: 9, isBold: true, alignment: 'center', fontFamily: 'Inter, sans-serif' }
+        ]
+      },
+      {
+        id: 'col-pres-ofppt-3',
+        width: 15,
+        lines: [
+          { id: 'pres-ofppt-logo-r', type: 'image', imageUrl: 'https://upload.wikimedia.org/wikipedia/commons/thumb/e/e0/OFPPT_Logo.svg/1200px-OFPPT_Logo.svg.png', logoSource: 'droit', alignment: 'center', imageWidth: 45, imageHeight: 45 }
+        ]
+      }
+    ]
+  },
+  {
+    id: 'preset-academic-two',
+    name: 'Bipartite Académique',
+    description: 'En-tête équilibré à deux colonnes avec séparateur central. Idéal pour les relevés de notes ou examens universitaires détaillés.',
+    headerColumns: [
+      {
+        id: 'col-pres-acad-1',
+        width: 50,
+        borderRight: true,
+        lines: [
+          { id: 'pres-acad-l1', type: 'text', text: '🏫 INSTITUTION : {{ETABLISSEMENT}}', fontSize: 10, isBold: true, alignment: 'left', fontFamily: 'Inter, sans-serif' },
+          { id: 'pres-acad-l2', type: 'text', text: 'Filière : {{FILIERE}}', fontSize: 9, isBold: false, alignment: 'left', fontFamily: 'Inter, sans-serif' },
+          { id: 'pres-acad-l3', type: 'text', text: 'Niveau d\'études : {{NIVEAU}}', fontSize: 9, isBold: false, alignment: 'left', fontFamily: 'Inter, sans-serif' }
+        ]
+      },
+      {
+        id: 'col-pres-acad-2',
+        width: 50,
+        lines: [
+          { id: 'pres-acad-r1', type: 'text', text: 'Saison Académique : {{ANNEE_ACAD}}', fontSize: 9, isBold: false, alignment: 'right', fontFamily: 'Inter, sans-serif' },
+          { id: 'pres-acad-r2', type: 'text', text: 'Intitulé du Module : {{MODULE}}', fontSize: 9.5, isBold: true, alignment: 'right', fontFamily: 'Inter, sans-serif' },
+          { id: 'pres-acad-r3', type: 'text', text: 'Date de l\'évaluation : {{DATE}}', fontSize: 9, isBold: false, isItalic: true, alignment: 'right', fontFamily: 'Inter, sans-serif' }
+        ]
+      }
+    ]
+  },
+  {
+    id: 'preset-modern-minimal',
+    name: 'Minimaliste Symétrique',
+    description: 'Structure simple à une seule colonne centrée, moderne et épurée. Idéal pour les évaluations continues et tests hebdomadaires.',
+    headerColumns: [
+      {
+        id: 'col-pres-min-1',
+        width: 100,
+        lines: [
+          { id: 'pres-min-l1', type: 'text', text: '{{REGION}}', fontSize: 8.5, isBold: true, alignment: 'center', fontFamily: 'Inter, sans-serif' },
+          { id: 'pres-min-l2', type: 'text', text: '⭐ {{ETABLISSEMENT}}', fontSize: 12, isBold: true, alignment: 'center', fontFamily: 'Inter, sans-serif' },
+          { id: 'pres-min-l3', type: 'text', text: 'Session du Module : {{MODULE}} ({{CODE_ORG}})', fontSize: 9, isBold: false, isItalic: true, alignment: 'center', fontFamily: 'Inter, sans-serif' },
+          { id: 'pres-min-l4', type: 'text', text: 'Année de formation : {{ANNEE_ACAD}} | Durée : {{DUREE}}', fontSize: 8.5, isBold: false, alignment: 'center', fontFamily: 'Inter, sans-serif' }
+        ]
+      }
+    ]
+  },
+  {
+    id: 'preset-maroc-ministere',
+    name: 'Ministériel National',
+    description: 'Mise en page tripartite inspirée des examens nationaux marocains, associant les armoiries et textes arabes emblématiques.',
+    headerColumns: [
+      {
+        id: 'col-pres-maroc-1',
+        width: 30,
+        borderRight: true,
+        lines: [
+          { id: 'pres-maroc-l1', type: 'text', text: 'ROYAUME DU MAROC', fontSize: 9, isBold: true, alignment: 'center', fontFamily: 'Inter, sans-serif' },
+          { id: 'pres-maroc-l2', type: 'text', text: '{{DIRECTION}}', fontSize: 8.5, isBold: false, alignment: 'center', fontFamily: 'Inter, sans-serif' },
+          { id: 'pres-maroc-l3', type: 'text', text: '{{ETABLISSEMENT}}', fontSize: 8.5, isBold: true, alignment: 'center', fontFamily: 'Inter, sans-serif' }
+        ]
+      },
+      {
+        id: 'col-pres-maroc-2',
+        width: 40,
+        borderRight: true,
+        lines: [
+          { id: 'pres-maroc-c-logo', type: 'image', imageUrl: 'https://upload.wikimedia.org/wikipedia/commons/thumb/e/e0/OFPPT_Logo.svg/1200px-OFPPT_Logo.svg.png', logoSource: 'gauche', alignment: 'center', imageWidth: 40, imageHeight: 40 },
+          { id: 'pres-maroc-c-titre', type: 'text', text: 'EXAMEN : {{TITRE}}', fontSize: 10, isBold: true, alignment: 'center', fontFamily: 'Inter, sans-serif' }
+        ]
+      },
+      {
+        id: 'col-pres-maroc-3',
+        width: 30,
+        lines: [
+          { id: 'pres-maroc-r1', type: 'text', text: 'المملكة المغربية', fontSize: 10, isBold: true, alignment: 'center', fontFamily: 'Amiri, serif' },
+          { id: 'pres-maroc-r2', type: 'text', text: '{{ORG_AR}}', fontSize: 8.5, isBold: true, alignment: 'center', fontFamily: 'Amiri, serif' }
+        ]
+      }
+    ]
+  }
+];
 
 interface OrganizationSettingsViewProps {
   onUpdate?: (settings: OrganizationSettings) => void;
@@ -23,7 +137,7 @@ export function OrganizationSettingsView({ onUpdate }: OrganizationSettingsViewP
     regionalDirection: 'Direction Régionale De BM-KH',
     institutionName: 'Institut Spécialisé de Technologie Appliquée AL HASSANIA Oued-Zem',
     orgSubName: 'DRBMKH',
-    orgLogoUrl: 'https://upload.wikimedia.org/wikipedia/commons/thumb/e/e0/OFPPT_Logo.svg/1200px-OFPPT_Logo.svg.png',
+    orgLogoUrl: '/api/assets/default-logo.png',
     regionName: 'ROYAUME DU MAROC',
     academicYear: '2024/2025',
     orgLogoBgColor: '#059669',
@@ -37,7 +151,10 @@ export function OrganizationSettingsView({ onUpdate }: OrganizationSettingsViewP
       { id: '3', text: 'Direction Régionale De BM-KH', fontSize: 10, isBold: true, isItalic: false, alignment: 'center', fontFamily: 'Inter, sans-serif' },
       { id: '4', text: 'Institut Spécialisé de Technologie Appliquée AL HASSANIA Oued-Zem', fontSize: 10, isBold: true, isItalic: false, alignment: 'center', fontFamily: 'Inter, sans-serif' }
     ],
-    footerColumns: []
+    footerColumns: [],
+    localAiEnabled: false,
+    localAiUrl: 'http://localhost:11434',
+    localAiModel: 'llama3'
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -58,13 +175,80 @@ export function OrganizationSettingsView({ onUpdate }: OrganizationSettingsViewP
       .replace(/{{DUREE}}/g, '2h 00m')
       .replace(/{{TYPE}}/g, 'EFM')
       .replace(/{{FILIERE}}/g, 'Développement Digital')
+      .replace(/{{NIVEAU}}/g, 'TS / T / B')
       .replace(/{{ETABLISSEMENT}}/g, settings.institutionName || 'INSTITUTION')
       .replace(/{{DIRECTION}}/g, settings.regionalDirection || 'DIRECTION RÉGIONALE')
       .replace(/{{REGION}}/g, settings.regionName || 'REGION')
       .replace(/{{ANNEE_ACAD}}/g, settings.academicYear || '2024/2025')
       .replace(/{{CODE_ORG}}/g, settings.orgSubName || 'ORG')
       .replace(/{{ORG_AR}}/g, settings.orgNameArabic || 'ORG AR')
-      .replace(/{{ORG_FR}}/g, settings.orgNameFrench || 'ORG FR');
+      .replace(/{{ORG_FR}}/g, settings.orgNameFrench || 'Office de la Formation Professionnelle et de la promotion du travail')
+      .replace(/{{PAGE}}/g, '1')
+      .replace(/{{TOTAL}}/g, '1');
+  };
+
+  const renderVariablesGuide = () => {
+    const list = [
+      { key: 'TITRE', desc: "Titre de l'épreuve d'examen", val: 'Examen Final' },
+      { key: 'MODULE', desc: "Intitulé complet du cours/module d'apprentissage", val: 'M101 - Développement Web' },
+      { key: 'PROF', desc: 'Nom ou prénom de l’enseignant / formateur', val: 'Formateur Nom' },
+      { key: 'DATE', desc: 'Date officielle de passation ou date courante', val: new Date().toLocaleDateString('fr-FR') },
+      { key: 'GROUPE', desc: 'Code ou nom de la classe d’étudiants', val: 'DEV101' },
+      { key: 'DUREE', desc: "Durée totale allouée pour l'examen", val: '2h 00m' },
+      { key: 'TYPE', desc: "Type de l'examen: CC (Contrôle Continu) ou EFM (Examen Fin de Module)", val: 'EFM' },
+      { key: 'FILIERE', desc: "Nom officiel du programme / filière de formation", val: 'Développement Digital' },
+      { key: 'NIVEAU', desc: "Niveau académique associé (TS, T ou B)", val: 'TS / T / B' },
+      { key: 'ETABLISSEMENT', desc: 'Nom de votre collège / institut', val: settings.institutionName || 'ISTA AL HASSANIA' },
+      { key: 'DIRECTION', desc: 'Direction régionale ou académie supérieure', val: settings.regionalDirection || 'Direction Régionale' },
+      { key: 'REGION', desc: 'Identifiant géographique national de l’organisation', val: settings.regionName || 'ROYAUME DU MAROC' },
+      { key: 'ANNEE_ACAD', desc: 'Saison académique active', val: settings.academicYear || '2024/2025' },
+      { key: 'CODE_ORG', desc: 'Code court / acronyme officiel de l’institution', val: settings.orgSubName || 'OFPPT' },
+      { key: 'ORG_AR', desc: "Nom de l'organisation en Arabe", val: settings.orgNameArabic || 'مكتب التكوين المهني...', isRtl: true },
+      { key: 'ORG_FR', desc: "Nom complet en Français", val: settings.orgNameFrench || 'Office de la Formation Professionnelle...' },
+      { key: 'PAGE', desc: 'Numéro de page dynamique (pied de page)', val: '1' },
+      { key: 'TOTAL', desc: 'Nombre global total de pages (pied de page)', val: '1' },
+    ];
+
+    return (
+      <div className="m-8 p-6 bg-slate-50 border-2 border-slate-100 rounded-3xl">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-xl bg-indigo-50 flex items-center justify-center">
+              <span className="text-sm font-black text-indigo-600">{"{ }"}</span>
+            </div>
+            <div>
+              <h4 className="text-sm font-black text-slate-800 uppercase tracking-tight">💡 Guide explicatif des variables de modèle</h4>
+              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Comment personnaliser les textes d'en-tête et pied de page</p>
+            </div>
+          </div>
+        </div>
+        
+        <p className="text-xs text-slate-500 mb-6 font-medium leading-relaxed bg-white p-4 rounded-2xl border border-slate-100">
+          Vous pouvez inclure des variables sous format <code className="bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded font-mono font-semibold">{"{{NOM_VARIABLE}}"}</code>. Notre moteur d'export les remplacera automatiquement par les données réelles lors de l'exportation.
+        </p>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+          {list.map((item) => (
+            <div key={item.key} className="p-4 bg-white rounded-2xl border border-slate-200/80 hover:border-indigo-200 transition-all flex flex-col justify-between space-y-3">
+              <div className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-black text-indigo-600 font-mono tracking-tight bg-indigo-50 px-2.5 py-1 rounded-xl">
+                    {"{{"}{item.key}{"}}"}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500 font-semibold leading-relaxed pt-1">{item.desc}</p>
+              </div>
+              <div className="pt-2 border-t border-slate-50 flex flex-col">
+                <span className="text-[9px] font-black tracking-widest text-slate-400 uppercase">Valeur de remplacement :</span>
+                <span className={`text-[11px] font-bold text-slate-700 pt-0.5 truncate ${item.isRtl ? 'font-serif text-right' : ''}`} dir={item.isRtl ? 'rtl' : 'ltr'}>
+                  {item.val || '—'}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
   };
 
   const hasUnsavedChanges = useMemo(() => {
@@ -228,6 +412,8 @@ export function OrganizationSettingsView({ onUpdate }: OrganizationSettingsViewP
     
     try {
       await api.settings.update(updatedSettings);
+      setInitialSettings(JSON.parse(JSON.stringify(updatedSettings)));
+      onUpdate?.(updatedSettings);
       setMessage({ type: 'success', text: `Modèle "${newTemplate.name}" enregistré.` });
       setTimeout(() => setMessage(null), 3000);
     } catch (error: any) {
@@ -248,6 +434,35 @@ export function OrganizationSettingsView({ onUpdate }: OrganizationSettingsViewP
       footerFontFamily: template.footerFontFamily ?? settings.footerFontFamily
     });
     setMessage({ type: 'success', text: `Modèle "${template.name}" appliqué.` });
+  };
+
+  const applyPreset = (preset: typeof HEADER_PRESETS[0]) => {
+    const columnsCopy = JSON.parse(JSON.stringify(preset.headerColumns));
+    
+    // Inject user's actual logos if present, so the preset displays them dynamically
+    if (settings.orgLogoUrl) {
+      columnsCopy.forEach((col: any) => {
+        col.lines.forEach((line: any) => {
+          if (line.type === 'image') {
+            if (line.id.includes('logo-l')) {
+              line.imageUrl = settings.orgLogoUrl;
+            } else if (line.id.includes('logo-r') && settings.orgLogoUrlRight) {
+              line.imageUrl = settings.orgLogoUrlRight;
+            } else if (line.id.includes('logo-r')) {
+              line.imageUrl = settings.orgLogoUrl;
+            }
+          }
+        });
+      });
+    }
+
+    setSettings({
+      ...settings,
+      headerColumns: columnsCopy
+    });
+    
+    setMessage({ type: 'success', text: `Le modèle prédéfini "${preset.name}" a été appliqué à votre en-tête d'impression et PDF.` });
+    setTimeout(() => setMessage(null), 4000);
   };
 
   const updateTemplate = async (id: string) => {
@@ -277,6 +492,8 @@ export function OrganizationSettingsView({ onUpdate }: OrganizationSettingsViewP
 
     try {
       await api.settings.update(updatedSettings);
+      setInitialSettings(JSON.parse(JSON.stringify(updatedSettings)));
+      onUpdate?.(updatedSettings);
       setMessage({ type: 'success', text: `Modèle "${template.name}" mis à jour.` });
     } catch (error: any) {
       setMessage({ type: 'error', text: 'Erreur lors de la mise à jour du modèle.' });
@@ -304,6 +521,8 @@ export function OrganizationSettingsView({ onUpdate }: OrganizationSettingsViewP
 
     try {
       await api.settings.update(updatedSettings);
+      setInitialSettings(JSON.parse(JSON.stringify(updatedSettings)));
+      onUpdate?.(updatedSettings);
       setMessage({ type: 'success', text: 'Modèle renommé.' });
       setTimeout(() => setMessage(null), 3000);
     } catch (error) {
@@ -326,6 +545,8 @@ export function OrganizationSettingsView({ onUpdate }: OrganizationSettingsViewP
     setSettings(updatedSettings);
     try {
       await api.settings.update(updatedSettings);
+      setInitialSettings(JSON.parse(JSON.stringify(updatedSettings)));
+      onUpdate?.(updatedSettings);
       setMessage({ type: 'success', text: `Modèle "${template.name}" supprimé.` });
     } catch (error) {
       setMessage({ type: 'error', text: 'Erreur lors de la suppression.' });
@@ -870,6 +1091,52 @@ export function OrganizationSettingsView({ onUpdate }: OrganizationSettingsViewP
                   </Button>
                 </div>
 
+            {/* Presets (Modèles Prédéfinis Prêts à l'Emploi) */}
+            <div className="p-6 bg-indigo-50/15 border-b border-slate-100">
+               <div className="flex items-center gap-3 mb-4">
+                 <div className="w-1.5 h-4 bg-indigo-600 rounded-full" />
+                 <div>
+                   <h4 className="text-sm font-black text-slate-800 uppercase tracking-tight">✨ Modèles d'En-tête Prédéfinis (Presets)</h4>
+                   <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Sélectionnez un modèle de base officiel pour l'appliquer instantanément</p>
+                 </div>
+               </div>
+
+               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                 {HEADER_PRESETS.map((preset) => (
+                   <div key={preset.id} className="p-4 rounded-3xl border-2 border-slate-200/85 bg-white hover:border-indigo-500 hover:shadow-soft transition-all flex flex-col justify-between space-y-4">
+                     <div className="space-y-1.5">
+                       <span className="text-xs font-black text-slate-800 block uppercase tracking-tight">{preset.name}</span>
+                       <p className="text-[10px] text-slate-500 font-semibold leading-relaxed line-clamp-3">{preset.description}</p>
+                     </div>
+
+                     {/* Visual column preview indicator */}
+                     <div className="flex gap-1 h-8 bg-slate-50 border border-slate-100/60 p-1 rounded-xl">
+                       {preset.headerColumns.map((col, idx) => (
+                         <div 
+                           key={idx} 
+                           style={{ width: `${col.width}%` }} 
+                           className="h-full bg-indigo-50 border border-indigo-100/50 rounded-lg flex items-center justify-center text-[8px] font-black text-indigo-500/80"
+                           title={`${col.width}% de largeur`}
+                         >
+                           {col.width}%
+                         </div>
+                       ))}
+                     </div>
+
+                     <Button 
+                       type="button" 
+                       variant="outline" 
+                       size="sm" 
+                       className="w-full h-8 text-[9px] font-black uppercase tracking-widest border-indigo-100 text-indigo-600 hover:bg-indigo-50/50 hover:border-indigo-200"
+                       onClick={() => applyPreset(preset)}
+                     >
+                       ⚡ Appliquer ce modèle
+                     </Button>
+                   </div>
+                 ))}
+               </div>
+            </div>
+
             {/* Templates Management area */}
             <div className="p-6 bg-slate-50 border-b border-slate-100">
                <div className="flex items-center justify-between mb-4">
@@ -978,6 +1245,9 @@ export function OrganizationSettingsView({ onUpdate }: OrganizationSettingsViewP
                )}
             </div>
 
+            {/* Guide explicatif des variables */}
+            {renderVariablesGuide()}
+
             {/* Visual Editor Section */}
             <div className="p-4 sm:p-12 bg-slate-200/50 relative overflow-hidden">
                {/* Decorative background elements to look like a desk */}
@@ -1062,7 +1332,7 @@ export function OrganizationSettingsView({ onUpdate }: OrganizationSettingsViewP
                             >
                               {line.type === 'image' ? (
                                 <img 
-                                  src={line.imageUrl || 'https://placehold.co/40x40?text=Logo'} 
+                                  src={getLineImageUrl(line, settings) || "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40' viewBox='0 0 40 40'><rect width='40' height='40' fill='%23f1f5f9'/><text x='50%25' y='50%25' font-family='sans-serif' font-size='8' font-weight='bold' fill='%2394a3b8' dominant-baseline='middle' text-anchor='middle'>LOGO</text></svg>"} 
                                   alt="Logo" 
                                   style={{ 
                                     width: line.imageWidth ? `${line.imageWidth}px` : '40px',
@@ -1115,7 +1385,7 @@ export function OrganizationSettingsView({ onUpdate }: OrganizationSettingsViewP
                               >
                                 {line.type === 'image' ? (
                                   <img 
-                                    src={line.imageUrl || 'https://placehold.co/40x40?text=Logo'} 
+                                    src={getLineImageUrl(line, settings) || "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40' viewBox='0 0 40 40'><rect width='40' height='40' fill='%23f1f5f9'/><text x='50%25' y='50%25' font-family='sans-serif' font-size='8' font-weight='bold' fill='%2394a3b8' dominant-baseline='middle' text-anchor='middle'>LOGO</text></svg>"} 
                                     alt="Logo" 
                                     style={{ 
                                       width: line.imageWidth ? `${line.imageWidth}px` : '30px',
@@ -1218,7 +1488,7 @@ export function OrganizationSettingsView({ onUpdate }: OrganizationSettingsViewP
                       <div className="w-8 h-8 rounded-lg bg-rose-100 flex items-center justify-center">
                         <ShieldAlert className="w-4 h-4 text-rose-600" />
                       </div>
-                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-tight">Anti Copier-Coller</label>
+                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-tight">Verrouillage de l'appareil</label>
                     </div>
                     <div className="flex items-center gap-3 h-[42px]">
                       <label className="relative inline-flex items-center cursor-pointer">
@@ -1235,10 +1505,10 @@ export function OrganizationSettingsView({ onUpdate }: OrganizationSettingsViewP
                           className="sr-only peer" 
                         />
                         <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-rose-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-rose-500"></div>
-                        <span className="ml-3 text-xs font-bold text-slate-600">{settings.defaultExamSettings?.disableCopyPaste ?? false ? 'Sécurisé' : 'Standard'}</span>
+                        <span className="ml-3 text-xs font-bold text-slate-600">{settings.defaultExamSettings?.disableCopyPaste ?? false ? 'Sécurisé (SEB Mode)' : 'Standard'}</span>
                       </label>
                     </div>
-                    <p className="text-[9px] text-slate-400 font-medium">Empêche les étudiants de copier les questions ou coller des réponses.</p>
+                    <p className="text-[9px] text-slate-400 font-medium">Safe Exam Browser Mode : force le plein écran, bloque les copier-coller et soumet la copie après 3 sorties d'onglet.</p>
                  </div>
                </div>
             </div>
@@ -1386,7 +1656,7 @@ export function OrganizationSettingsView({ onUpdate }: OrganizationSettingsViewP
                                 style={{ direction: /[\u0600-\u06FF]/.test(line.text || '') ? 'rtl' : 'ltr' }}
                               />
                               <div className="flex flex-wrap gap-1 mt-1">
-                                 {['TITRE', 'MODULE', 'PROF', 'DATE', 'GROUPE', 'DUREE', 'TYPE', 'FILIERE', 'ORG_AR', 'ORG_FR'].map(v => (
+                                 {['TITRE', 'MODULE', 'PROF', 'DATE', 'GROUPE', 'DUREE', 'TYPE', 'FILIERE', 'NIVEAU', 'ETABLISSEMENT', 'DIRECTION', 'REGION', 'ANNEE_ACAD', 'CODE_ORG', 'ORG_AR', 'ORG_FR'].map(v => (
                                    <button 
                                      key={v}
                                      type="button"
@@ -1399,32 +1669,65 @@ export function OrganizationSettingsView({ onUpdate }: OrganizationSettingsViewP
                               </div>
                               </>
                             ) : (
-                              <div className="flex gap-2">
-                                <div className="flex-1">
-                                  <input 
-                                    type="text" 
-                                    value={line.imageUrl || ''}
-                                    onChange={(e) => updateLineInColumn(col.id, line.id, { imageUrl: e.target.value })}
-                                    className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500"
-                                    placeholder="URL de l'image (logo)..."
-                                  />
+                              <div className="space-y-2 w-full">
+                                <div className="flex flex-col gap-1">
+                                  <label className="text-[9px] font-black text-indigo-600 uppercase tracking-widest">Source de l'image de l'en-tête</label>
+                                  <select
+                                    value={line.logoSource || 'custom'}
+                                    onChange={(e) => updateLineInColumn(col.id, line.id, { logoSource: e.target.value as any })}
+                                    className="px-3 py-1.5 text-xs rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500 bg-white font-semibold"
+                                  >
+                                    <option value="gauche">⭐ Logo Gauche (Onglet Général)</option>
+                                    <option value="droit">⭐ Logo Droit (Onglet Général)</option>
+                                    <option value="custom">🌐 URL ou Image Personnalisée / Téléversée</option>
+                                  </select>
                                 </div>
-                                <label className="cursor-pointer bg-white p-1.5 rounded-lg border border-slate-200 hover:bg-slate-50">
-                                  <Upload className="w-4 h-4 text-slate-500" />
-                                  <input 
-                                    type="file" 
-                                    accept="image/*" 
-                                    className="hidden" 
-                                    onChange={(e) => {
-                                      const file = e.target.files?.[0];
-                                      if (file) {
-                                        const reader = new FileReader();
-                                        reader.onloadend = () => updateLineInColumn(col.id, line.id, { imageUrl: reader.result as string });
-                                        reader.readAsDataURL(file);
-                                      }
-                                    }}
-                                  />
-                                </label>
+
+                                {(line.logoSource === 'gauche' || line.logoSource === 'droit') ? (
+                                  <div className="p-3 bg-indigo-50/50 rounded-xl border border-indigo-100/50 flex items-center justify-between">
+                                    <div className="space-y-0.5">
+                                      <span className="text-[10px] font-black text-indigo-900 block uppercase tracking-tight">Image dynamique active</span>
+                                      <p className="text-[9px] text-indigo-500/80 font-bold">
+                                        Modifiable depuis l'onglet "Général" du panneau.
+                                      </p>
+                                    </div>
+                                    <div className="w-10 h-10 rounded-lg bg-white border border-indigo-100/80 flex items-center justify-center p-1 overflow-hidden">
+                                      <img 
+                                        src={(line.logoSource === 'gauche' ? settings.orgLogoUrl : settings.orgLogoUrlRight) || "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40' viewBox='0 0 40 40'><rect width='40' height='40' fill='%23f8fafc'/><text x='50%25' y='50%25' font-family='sans-serif' font-size='8' font-weight='bold' fill='%23cbd5e1' dominant-baseline='middle' text-anchor='middle'>VIDE</text></svg>"} 
+                                        alt="Aperçu Général" 
+                                        className="max-h-full max-w-full object-contain" 
+                                      />
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className="flex gap-2">
+                                    <div className="flex-1">
+                                      <input 
+                                        type="text" 
+                                        value={line.imageUrl || ''}
+                                        onChange={(e) => updateLineInColumn(col.id, line.id, { imageUrl: e.target.value })}
+                                        className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500"
+                                        placeholder="URL de l'image (logo)..."
+                                      />
+                                    </div>
+                                    <label className="cursor-pointer bg-white p-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 flex items-center justify-center">
+                                      <Upload className="w-4 h-4 text-slate-500" />
+                                      <input 
+                                        type="file" 
+                                        accept="image/*" 
+                                        className="hidden" 
+                                        onChange={(e) => {
+                                          const file = e.target.files?.[0];
+                                          if (file) {
+                                            const reader = new FileReader();
+                                            reader.onloadend = () => updateLineInColumn(col.id, line.id, { imageUrl: reader.result as string });
+                                            reader.readAsDataURL(file);
+                                          }
+                                        }}
+                                      />
+                                    </label>
+                                  </div>
+                                )}
                               </div>
                             )}
 
@@ -1626,6 +1929,8 @@ export function OrganizationSettingsView({ onUpdate }: OrganizationSettingsViewP
                   </div>
                 </div>
 
+                {renderVariablesGuide()}
+
                 <div className="p-8 space-y-8">
                   {settings.showFooter ? (
                     <>
@@ -1760,7 +2065,7 @@ export function OrganizationSettingsView({ onUpdate }: OrganizationSettingsViewP
                                         style={{ direction: /[\u0600-\u06FF]/.test(line.text || '') ? 'rtl' : 'ltr' }}
                                       />
                                       <div className="flex flex-wrap gap-1 mt-1">
-                                         {['TITRE', 'MODULE', 'PROF', 'DATE', 'GROUPE', 'DUREE', 'TYPE', 'FILIERE', 'PAGE', 'TOTAL', 'ORG_AR', 'ORG_FR'].map(v => (
+                                         {['TITRE', 'MODULE', 'PROF', 'DATE', 'GROUPE', 'DUREE', 'TYPE', 'FILIERE', 'NIVEAU', 'PAGE', 'TOTAL', 'ETABLISSEMENT', 'DIRECTION', 'REGION', 'ANNEE_ACAD', 'CODE_ORG', 'ORG_AR', 'ORG_FR'].map(v => (
                                            <button 
                                              key={v}
                                              type="button"
@@ -1773,32 +2078,65 @@ export function OrganizationSettingsView({ onUpdate }: OrganizationSettingsViewP
                                       </div>
                                       </>
                                     ) : (
-                                      <div className="flex gap-2">
-                                        <div className="flex-1">
-                                          <input 
-                                            type="text" 
-                                            value={line.imageUrl || ''}
-                                            onChange={(e) => updateLineInFooterColumn(col.id, line.id, { imageUrl: e.target.value })}
-                                            className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500"
-                                            placeholder="URL de l'image (logo)..."
-                                          />
+                                      <div className="space-y-2 w-full">
+                                        <div className="flex flex-col gap-1">
+                                          <label className="text-[9px] font-black text-indigo-600 uppercase tracking-widest">Source de l'image du pied de page</label>
+                                          <select
+                                            value={line.logoSource || 'custom'}
+                                            onChange={(e) => updateLineInFooterColumn(col.id, line.id, { logoSource: e.target.value as any })}
+                                            className="px-3 py-1.5 text-xs rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500 bg-white font-semibold"
+                                          >
+                                            <option value="gauche">⭐ Logo Gauche (Onglet Général)</option>
+                                            <option value="droit">⭐ Logo Droit (Onglet Général)</option>
+                                            <option value="custom">🌐 URL ou Image Personnalisée / Téléversée</option>
+                                          </select>
                                         </div>
-                                        <label className="cursor-pointer bg-white p-1.5 rounded-lg border border-slate-200 hover:bg-slate-50">
-                                          <Upload className="w-4 h-4 text-slate-500" />
-                                          <input 
-                                            type="file" 
-                                            accept="image/*" 
-                                            className="hidden" 
-                                            onChange={(e) => {
-                                              const file = e.target.files?.[0];
-                                              if (file) {
-                                                const reader = new FileReader();
-                                                reader.onloadend = () => updateLineInFooterColumn(col.id, line.id, { imageUrl: reader.result as string });
-                                                reader.readAsDataURL(file);
-                                              }
-                                            }}
-                                          />
-                                        </label>
+
+                                        {(line.logoSource === 'gauche' || line.logoSource === 'droit') ? (
+                                          <div className="p-3 bg-indigo-50/50 rounded-xl border border-indigo-100/50 flex items-center justify-between">
+                                            <div className="space-y-0.5">
+                                              <span className="text-[10px] font-black text-indigo-900 block uppercase tracking-tight">Image dynamique active</span>
+                                              <p className="text-[9px] text-indigo-500/80 font-bold">
+                                                Modifiable depuis l'onglet "Général" du panneau.
+                                              </p>
+                                            </div>
+                                            <div className="w-10 h-10 rounded-lg bg-white border border-indigo-100/80 flex items-center justify-center p-1 overflow-hidden">
+                                              <img 
+                                                src={(line.logoSource === 'gauche' ? settings.orgLogoUrl : settings.orgLogoUrlRight) || "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40' viewBox='0 0 40 40'><rect width='40' height='40' fill='%23f8fafc'/><text x='50%25' y='50%25' font-family='sans-serif' font-size='8' font-weight='bold' fill='%23cbd5e1' dominant-baseline='middle' text-anchor='middle'>VIDE</text></svg>"} 
+                                                alt="Aperçu Général" 
+                                                className="max-h-full max-w-full object-contain" 
+                                              />
+                                            </div>
+                                          </div>
+                                        ) : (
+                                          <div className="flex gap-2">
+                                            <div className="flex-1">
+                                              <input 
+                                                type="text" 
+                                                value={line.imageUrl || ''}
+                                                onChange={(e) => updateLineInFooterColumn(col.id, line.id, { imageUrl: e.target.value })}
+                                                className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500"
+                                                placeholder="URL de l'image (logo)..."
+                                              />
+                                            </div>
+                                            <label className="cursor-pointer bg-white p-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 flex items-center justify-center">
+                                              <Upload className="w-4 h-4 text-slate-500" />
+                                              <input 
+                                                type="file" 
+                                                accept="image/*" 
+                                                className="hidden" 
+                                                onChange={(e) => {
+                                                  const file = e.target.files?.[0];
+                                                  if (file) {
+                                                    const reader = new FileReader();
+                                                    reader.onloadend = () => updateLineInFooterColumn(col.id, line.id, { imageUrl: reader.result as string });
+                                                    reader.readAsDataURL(file);
+                                                  }
+                                                }}
+                                              />
+                                            </label>
+                                          </div>
+                                        )}
                                       </div>
                                     )}
 
@@ -2087,6 +2425,66 @@ export function OrganizationSettingsView({ onUpdate }: OrganizationSettingsViewP
                 </div>
 
                 <div className="p-8 space-y-8">
+                   {/* Réseau Local & IA Hors-ligne Section */}
+                   <div className="p-8 bg-white border-2 border-slate-100 rounded-3xl shadow-sm space-y-6">
+                      <div className="flex items-center justify-between">
+                         <div className="space-y-1">
+                            <h4 className="text-sm font-black text-slate-800 uppercase tracking-tight flex items-center gap-2">
+                               <div className="w-1 h-3 bg-emerald-500 rounded-full" />
+                               Intranet & Intelligence Artificielle Hors-ligne
+                            </h4>
+                            <p className="text-xs text-slate-400">Configurez un serveur d'IA local (Ollama) pour utiliser la génération et l'évaluation de questions 100% hors-ligne dans un réseau local isolé.</p>
+                         </div>
+                         <label className="relative inline-flex items-center cursor-pointer">
+                           <input
+                             type="checkbox"
+                             checked={settings.localAiEnabled || false}
+                             onChange={(e) => setSettings({ ...settings, localAiEnabled: e.target.checked })}
+                             className="sr-only peer"
+                           />
+                           <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-100 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+                         </label>
+                      </div>
+
+                      {settings.localAiEnabled && (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 pt-6 border-t border-slate-50 animate-in slide-in-from-top-4 duration-300">
+                           <div className="space-y-4">
+                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">URL du serveur d'IA local (Ollama / LocalAI)</label>
+                              <input
+                                type="text"
+                                value={settings.localAiUrl || 'http://localhost:11434'}
+                                onChange={(e) => setSettings({ ...settings, localAiUrl: e.target.value })}
+                                placeholder="http://127.0.0.1:11434"
+                                className="w-full px-4 py-3 bg-slate-50 border-2 border-transparent focus:border-indigo-500/20 focus:bg-white rounded-2xl text-sm font-bold transition-all outline-none"
+                              />
+                              <p className="text-[10px] text-slate-400 font-medium">L'adresse de la machine hôte faisant tourner l'IA sur le réseau local ou "http://localhost:11434" sur le serveur lui-même.</p>
+                           </div>
+                           <div className="space-y-4">
+                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Modèle IA Utilisé</label>
+                              <input
+                                type="text"
+                                value={settings.localAiModel || 'llama3'}
+                                onChange={(e) => setSettings({ ...settings, localAiModel: e.target.value })}
+                                placeholder="ex: llama3, mistral ou gemma2"
+                                className="w-full px-4 py-3 bg-slate-50 border-2 border-transparent focus:border-indigo-500/20 focus:bg-white rounded-2xl text-sm font-bold transition-all outline-none"
+                              />
+                              <p className="text-[10px] text-slate-400 font-medium">Tapez le nom exact du modèle téléchargé via Ollama (ex: <code className="font-mono bg-slate-100 px-1 py-0.5 rounded text-slate-600">llama3</code> ou <code className="font-mono bg-slate-100 px-1 py-0.5 rounded text-slate-600">llama3.2</code>).</p>
+                           </div>
+
+                           <div className="col-span-1 md:col-span-2 p-5 bg-amber-50/55 border border-amber-200/40 rounded-2xl space-y-2">
+                             <h5 className="text-xs font-black text-amber-800 uppercase tracking-tight flex items-center gap-1.5">
+                               💡 Tutoriel express pour installer l'IA locale (Ollama)
+                             </h5>
+                             <ul className="text-[11px] text-amber-700 space-y-1 font-medium list-decimal list-inside leading-relaxed">
+                               <li>Téléchargez et installez <b>Ollama</b> sur l'ordinateur serveur : <a href="https://ollama.com" target="_blank" rel="noreferrer" className="underline text-indigo-600 font-bold font-mono">https://ollama.com</a></li>
+                               <li>Dans le terminal de l'ordinateur faisant tourner Ollama, téléchargez le modèle souhaité (ex: <code className="font-mono bg-white px-1 py-0.5 rounded shadow-sm text-indigo-600 font-black">ollama run llama3</code>).</li>
+                               <li>Assurez-vous qu'Ollama écoute sur toutes les interfaces réseau si le client utilise une autre machine que le serveur : configurez l'environnement <code className="font-mono text-xs">OLLAMA_HOST=0.0.0.0</code> avant de lancer Ollama.</li>
+                             </ul>
+                           </div>
+                        </div>
+                      )}
+                   </div>
+
                    <div className="p-8 bg-white border-2 border-slate-100 rounded-3xl shadow-sm space-y-6">
                       <div className="flex items-center justify-between">
                          <div className="space-y-1">

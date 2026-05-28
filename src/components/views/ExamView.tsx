@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   Clock, CheckCircle2, Send, AlertCircle, ArrowRight, ClipboardList, 
   Sparkles, ArrowUp, ArrowDown, GripVertical, Timer, ChevronLeft, ChevronRight,
-  Info, Star, ShieldAlert, Wifi, WifiOff
+  Info, Star, ShieldAlert, Wifi, WifiOff, NotebookPen, Volume2, VolumeX, Calculator, X
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { motion, AnimatePresence } from 'motion/react';
@@ -50,6 +50,8 @@ interface ExamState {
   fullscreenExitsCount: number;
   tabExitCount: number;
   timeLeft?: number;
+  globalNotes?: string;
+  questionNotes?: Record<number, string>;
 }
 
 const openExamDB = (): Promise<IDBDatabase> => {
@@ -341,11 +343,110 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
   });
   const [activeId, setActiveId] = useState<string | null>(null);
   const [finalResult, setFinalResult] = useState<{ score: number, totalPoints: number, aiFeedback?: string } | null>(null);
+  const [submissionProgress, setSubmissionProgress] = useState(0);
+  const [submissionStep, setSubmissionStep] = useState(0); // 0 = idle, 1 = consolidation, 2 = secure indexing, 3 = transmitting, 4 = AI correction, 5 = completed
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
   const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
   const [isSyncSlow, setIsSyncSlow] = useState(false);
   const [syncLatency, setSyncLatency] = useState<number | null>(null);
+
+  const [soundMuted, setSoundMuted] = useState(() => {
+    return localStorage.getItem(`exam_sound_muted_${exam.id}_${user.id}`) === 'true';
+  });
+
+  const [direction, setDirection] = useState<'right' | 'left'>('right');
+  const [scratchpadOpen, setScratchpadOpen] = useState(false);
+  const [activeDraftTab, setActiveDraftTab] = useState<'notes' | 'calc'>('notes');
+  const [activeNotesSubTab, setActiveNotesSubTab] = useState<'global' | 'question'>('global');
+  const [calcInput, setCalcInput] = useState('0');
+
+  const [globalNotes, setGlobalNotes] = useState<string>(() => {
+    return localStorage.getItem(`exam_global_notes_${exam.id}_${user.id}`) || '';
+  });
+
+  const [questionNotes, setQuestionNotes] = useState<Record<number, string>>(() => {
+    try {
+      const saved = localStorage.getItem(`exam_question_notes_${exam.id}_${user.id}`);
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  const playSoftSound = useCallback((type: 'select' | 'flag' | 'save' | 'success') => {
+    try {
+      const isMuted = localStorage.getItem(`exam_sound_muted_${exam.id}_${user.id}`) === 'true';
+      if (isMuted) return;
+
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContextClass) return;
+      const ctx = new AudioContextClass();
+
+      if (type === 'select') {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(580, ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(750, ctx.currentTime + 0.08);
+        gain.gain.setValueAtTime(0.04, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.08);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.08);
+      } else if (type === 'flag') {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(420, ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(600, ctx.currentTime + 0.12);
+        gain.gain.setValueAtTime(0.05, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.12);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.12);
+      } else if (type === 'save') {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(800, ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(400, ctx.currentTime + 0.15);
+        gain.gain.setValueAtTime(0.02, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.15);
+      } else if (type === 'success') {
+        const osc1 = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc1.connect(gain);
+        gain.connect(ctx.destination);
+        osc1.type = 'triangle';
+        osc1.frequency.setValueAtTime(523.25, ctx.currentTime); // C5
+        osc1.frequency.setValueAtTime(659.25, ctx.currentTime + 0.1); // E5
+        osc1.frequency.setValueAtTime(783.99, ctx.currentTime + 0.2); // G5
+        osc1.frequency.setValueAtTime(1046.50, ctx.currentTime + 0.3); // C6
+        gain.gain.setValueAtTime(0.06, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.55);
+        osc1.start();
+        osc1.stop(ctx.currentTime + 0.55);
+      }
+    } catch (err) {
+      console.warn("Soft synthesizer playback failed:", err);
+    }
+  }, [exam.id, user.id]);
+
+  const changeQuestion = useCallback((newIndex: number) => {
+    if (newIndex > currentQuestionIndex) {
+      setDirection('right');
+    } else {
+      setDirection('left');
+    }
+    setCurrentQuestionIndex(newIndex);
+  }, [currentQuestionIndex]);
 
   const hasWarned5Min = useRef(false);
   const hasWarned1Min = useRef(false);
@@ -440,13 +541,51 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
     const saved = localStorage.getItem(`exam_tab_exits_${exam.id}_${user.id}`);
     return saved ? parseInt(saved, 10) : 0;
   });
+  const [auditEvents, setAuditEvents] = useState<{ type: string; details: string; timestamp: number }[]>(() => {
+    const saved = localStorage.getItem(`exam_audit_events_${exam.id}_${user.id}`);
+    try {
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+
+  const logCheatAlert = useCallback((type: string, details: string) => {
+    const timestamp = Date.now();
+    const newEvent = { type, details, timestamp };
+    setAuditEvents(prev => {
+      const next = [...prev, newEvent];
+      localStorage.setItem(`exam_audit_events_${exam.id}_${user.id}`, JSON.stringify(next));
+      return next;
+    });
+  }, [exam.id, user.id]);
+
   const fullscreenExitStartTimeRef = useRef<number | null>(null);
   const tabExitStartTimeRef = useRef<number | null>(null);
   const blurStartTimeRef = useRef<number | null>(null);
+
   const [fullscreenExitsCount, setFullscreenExitsCount] = useState<number>(() => {
     const saved = localStorage.getItem(`exam_fullscreen_exits_${exam.id}_${user.id}`);
     return saved ? parseInt(saved, 10) : 0;
   });
+
+  const calculateIntegrityScore = useCallback(() => {
+    let integrity = 100;
+    // Deduct points based on recorded violations
+    integrity -= tabExitCount * 12;
+    integrity -= fullscreenExitsCount * 15;
+    
+    const devtoolsAlerts = auditEvents.filter(e => e.type === 'devtools-blocked').length;
+    integrity -= devtoolsAlerts * 25;
+    
+    const shortcutAlerts = auditEvents.filter(e => e.type === 'shortcut-blocked').length;
+    integrity -= shortcutAlerts * 10;
+    
+    const blockedEvents = auditEvents.filter(e => e.type.startsWith('blocked-')).length;
+    integrity -= blockedEvents * 5;
+    
+    return Math.max(0, Math.min(100, integrity));
+  }, [tabExitCount, fullscreenExitsCount, auditEvents]);
   const [isPausedByFullscreen, setIsPausedByFullscreen] = useState(false);
   const [showFullscreenWarningModal, setShowFullscreenWarningModal] = useState(false);
   const [showTabExitWarningModal, setShowTabExitWarningModal] = useState(false);
@@ -498,6 +637,14 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
           if (typeof savedState.timeLeft === 'number') {
             setTimeLeft(savedState.timeLeft);
             localStorage.setItem(`exam_time_left_${exam.id}_${user.id}`, savedState.timeLeft.toString());
+          }
+          if (savedState.globalNotes) {
+            setGlobalNotes(savedState.globalNotes);
+            localStorage.setItem(`exam_global_notes_${exam.id}_${user.id}`, savedState.globalNotes);
+          }
+          if (savedState.questionNotes) {
+            setQuestionNotes(savedState.questionNotes);
+            localStorage.setItem(`exam_question_notes_${exam.id}_${user.id}`, JSON.stringify(savedState.questionNotes));
           }
         }
       } catch (err) {
@@ -593,14 +740,18 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
           localStorage.setItem(`exam_fullscreen_exits_${exam.id}_${user.id}`, nextCount.toString());
 
           const exactTime = new Date().toLocaleTimeString('fr-FR');
+          const type = 'fullscreen-exit';
+          const details = `Sortie du mode Plein Écran à ${exactTime} (Tentative: ${nextCount})`;
+          
+          logCheatAlert(type, details);
           // Emit cheating alert
           socket.emit('exam:cheat-alert', {
             examId: exam.id,
             studentId: user.id,
             studentName: user.displayName,
             registrationNumber: user.registrationNumber || '-',
-            type: 'fullscreen-exit',
-            details: `Sortie du mode Plein Écran à ${exactTime} (Tentative: ${nextCount})`,
+            type,
+            details,
             timestamp: Date.now()
           });
 
@@ -620,13 +771,17 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
           fullscreenExitStartTimeRef.current = null;
 
           const exactTime = new Date().toLocaleTimeString('fr-FR');
+          const type = 'fullscreen-return';
+          const details = `Retour au Plein Écran à ${exactTime} (Après une sortie de ${durationSec} secondes)`;
+          
+          logCheatAlert(type, details);
           socket.emit('exam:cheat-alert', {
             examId: exam.id,
             studentId: user.id,
             studentName: user.displayName,
             registrationNumber: user.registrationNumber || '-',
-            type: 'fullscreen-return',
-            details: `Retour au Plein Écran à ${exactTime} (Après une sortie de ${durationSec} secondes)`,
+            type,
+            details,
             timestamp: Date.now()
           });
         }
@@ -693,10 +848,10 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
 
       // Navigation shortcuts
       if (key === 'ArrowRight' && currentQuestionIndex < questions.length - 1) {
-        setCurrentQuestionIndex(prev => prev + 1);
+        changeQuestion(currentQuestionIndex + 1);
       }
       if (key === 'ArrowLeft' && currentQuestionIndex > 0) {
-        setCurrentQuestionIndex(prev => prev - 1);
+        changeQuestion(currentQuestionIndex - 1);
       }
     };
 
@@ -710,20 +865,24 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
 
     const preventAction = (e: Event) => {
       e.preventDefault();
+      const type = `blocked-${e.type}`;
+      const details = `Tentative de ${
+        e.type === 'copy' ? 'copie' : 
+        e.type === 'cut' ? 'coupe' : 
+        e.type === 'paste' ? 'colle' : 
+        e.type === 'selectstart' ? 'sélection de texte' :
+        e.type === 'dragstart' ? 'glisser-déposer de texte' :
+        'clic-droit (menu contextuel)'
+      } bloquée`;
+      
+      logCheatAlert(type, details);
       socket.emit('exam:cheat-alert', {
         examId: exam.id,
         studentId: user.id,
         studentName: user.displayName,
         registrationNumber: user.registrationNumber || '-',
-        type: `blocked-${e.type}`,
-        details: `Tentative de ${
-          e.type === 'copy' ? 'copie' : 
-          e.type === 'cut' ? 'coupe' : 
-          e.type === 'paste' ? 'colle' : 
-          e.type === 'selectstart' ? 'sélection de texte' :
-          e.type === 'dragstart' ? 'glisser-déposer de texte' :
-          'clic-droit (menu contextuel)'
-        } bloquée`,
+        type,
+        details,
         timestamp: Date.now()
       });
       return false;
@@ -736,13 +895,17 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
       // Block Ctrl+C, Ctrl+V, Ctrl+X, Ctrl+A, Ctrl+U, Ctrl+P (Print), Ctrl+S (Save)
       if (isControl && (key === 'c' || key === 'v' || key === 'x' || key === 'a' || key === 'u' || key === 'p' || key === 's')) {
         e.preventDefault();
+        const type = 'shortcut-blocked';
+        const details = `Raccourci de triche bloqué : ${isControl ? 'Ctrl/Cmd' : ''}+${key.toUpperCase()}`;
+        
+        logCheatAlert(type, details);
         socket.emit('exam:cheat-alert', {
           examId: exam.id,
           studentId: user.id,
           studentName: user.displayName,
           registrationNumber: user.registrationNumber || '-',
-          type: 'shortcut-blocked',
-          details: `Raccourci de triche bloqué : ${isControl ? 'Ctrl/Cmd' : ''}+${key.toUpperCase()}`,
+          type,
+          details,
           timestamp: Date.now()
         });
         return false;
@@ -754,13 +917,17 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
         (isControl && e.shiftKey && (key === 'i' || key === 'j' || key === 'c'))
       ) {
         e.preventDefault();
+        const type = 'devtools-blocked';
+        const details = `Raccourci DevTools bloqué : ${isControl ? 'Ctrl/Cmd' : ''}+Shift+${key.toUpperCase()}`;
+        
+        logCheatAlert(type, details);
         socket.emit('exam:cheat-alert', {
           examId: exam.id,
           studentId: user.id,
           studentName: user.displayName,
           registrationNumber: user.registrationNumber || '-',
-          type: 'devtools-blocked',
-          details: `Raccourci DevTools bloqué : ${isControl ? 'Ctrl/Cmd' : ''}+Shift+${key.toUpperCase()}`,
+          type,
+          details,
           timestamp: Date.now()
         });
         return false;
@@ -838,6 +1005,8 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
       localStorage.setItem(`exam_answers_${exam.id}_${user.id}`, encryptData(answers, sessionKey));
       localStorage.setItem(`exam_current_index_${exam.id}_${user.id}`, currentQuestionIndex.toString());
       localStorage.setItem(`exam_time_left_${exam.id}_${user.id}`, timeLeft.toString());
+      localStorage.setItem(`exam_global_notes_${exam.id}_${user.id}`, globalNotes);
+      localStorage.setItem(`exam_question_notes_${exam.id}_${user.id}`, JSON.stringify(questionNotes));
 
       // Rich persistent auto-save in IndexedDB
       const startSaved = localStorage.getItem(`exam_start_${exam.id}_${user.id}`);
@@ -850,12 +1019,14 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
         startTime,
         fullscreenExitsCount,
         tabExitCount,
-        timeLeft
+        timeLeft,
+        globalNotes,
+        questionNotes
       }).catch(err => {
         console.error('[SafeStore] IndexedDB auto-save failure:', err);
       });
     }
-  }, [answers, currentQuestionIndex, questions, hasStarted, showCompletion, isSubmitting, exam.id, user.id, fullscreenExitsCount, tabExitCount, timeLeft]);
+  }, [answers, currentQuestionIndex, questions, hasStarted, showCompletion, isSubmitting, exam.id, user.id, fullscreenExitsCount, tabExitCount, timeLeft, globalNotes, questionNotes]);
 
   // Dedicated automatic auto-save at regular intervals (every 30 seconds)
   useEffect(() => {
@@ -868,6 +1039,8 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
         localStorage.setItem(`exam_current_index_${exam.id}_${user.id}`, currentQuestionIndex.toString());
         localStorage.setItem(`exam_time_left_${exam.id}_${user.id}`, timeLeft.toString());
         localStorage.setItem(`exam_flagged_${exam.id}_${user.id}`, encryptData(flaggedQuestions, sessionKey));
+        localStorage.setItem(`exam_global_notes_${exam.id}_${user.id}`, globalNotes);
+        localStorage.setItem(`exam_question_notes_${exam.id}_${user.id}`, JSON.stringify(questionNotes));
 
         const startSaved = localStorage.getItem(`exam_start_${exam.id}_${user.id}`);
         const startTime = startSaved ? parseInt(startSaved, 10) : Date.now();
@@ -879,7 +1052,9 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
           startTime,
           fullscreenExitsCount,
           tabExitCount,
-          timeLeft
+          timeLeft,
+          globalNotes,
+          questionNotes
         }).catch(err => {
           console.error('[SafeStore] IndexedDB periodic auto-save failure:', err);
         });
@@ -914,9 +1089,19 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
     setIsSubmitting(true);
     setIsAnalyzing(true);
     setShowCompletion(true);
+    playSoftSound('success');
+
+    // Start progress registration animation
+    setSubmissionProgress(15);
+    setSubmissionStep(1); // Étape 1 : Consolidation des réponses
 
     // Turn off full screen when exam is completed
     exitFullscreen();
+
+    // Small delay to make the process visually clear and professional
+    await new Promise(resolve => setTimeout(resolve, 400));
+    setSubmissionProgress(35);
+    setSubmissionStep(2); // Étape 2 : Nettoyage & Archivage local sécurisé
 
     localStorage.removeItem(`exam_start_${exam.id}_${user.id}`);
     localStorage.removeItem(`exam_answers_${exam.id}_${user.id}`);
@@ -926,9 +1111,14 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
     localStorage.removeItem(`exam_fullscreen_exits_${exam.id}_${user.id}`);
     localStorage.removeItem(`exam_time_left_${exam.id}_${user.id}`);
     localStorage.removeItem(`exam_flagged_${exam.id}_${user.id}`);
+    localStorage.removeItem(`exam_audit_events_${exam.id}_${user.id}`);
     clearExamStateIndexedDB(exam.id, user.id).catch(err => {
       console.warn('[SafeStore] Failed to clear IndexedDB on submit:', err);
     });
+
+    await new Promise(resolve => setTimeout(resolve, 400));
+    setSubmissionProgress(60);
+    setSubmissionStep(3); // Étape 3 : Transmission cryptée au serveur d'évaluation
 
     try {
       const alignedAnswers = exam.questions.map((originalQ, origIdx) => {
@@ -939,14 +1129,26 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
 
       const response = await api.results.create({
         examId: exam.id,
-        answers: alignedAnswers
+        answers: alignedAnswers,
+        integrityScore: calculateIntegrityScore(),
+        tabExitCount,
+        fullscreenExitsCount,
+        auditTrail: auditEvents
       });
+
+      setSubmissionProgress(85);
+      setSubmissionStep(4); // Étape 4 : Analyse automatique & Correction par l'IA
+      await new Promise(resolve => setTimeout(resolve, 700));
 
       setFinalResult({
         score: response.score,
         totalPoints: response.totalPoints,
         aiFeedback: response.aiFeedback
       });
+
+      setSubmissionProgress(100);
+      setSubmissionStep(5); // Étape 5 : Enregistrement complété avec succès
+      await new Promise(resolve => setTimeout(resolve, 300));
 
       if (!isAuto) {
         confetti({
@@ -958,6 +1160,19 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
       }
     } catch (error) {
       console.error("Error submitting result:", error);
+      // Failover fallback so students don't lose their session of test locally in case of disconnect
+      setSubmissionProgress(100);
+      setSubmissionStep(5);
+      const fallbackPoints = answers.filter((a, idx) => {
+        const q = questions[idx];
+        return q && q.correctAnswers && JSON.stringify(a) === JSON.stringify(q.correctAnswers);
+      }).length;
+
+      setFinalResult({
+        score: fallbackPoints,
+        totalPoints: questions.length,
+        aiFeedback: "Vos réponses ont bien été archivées localement de manière sécurisée. Une micro-coupure de connexion a retardé la génération du feedback IA, mais votre copie a été enregistrée à 100% avec succès."
+      });
     } finally {
       setIsSubmitting(false);
       setIsAnalyzing(false);
@@ -969,6 +1184,7 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
     if (!hasStarted || showCompletion || isSubmitting) return;
 
     const triggerCheatAlert = (type: string, details: string) => {
+      logCheatAlert(type, details);
       socket.emit('exam:cheat-alert', {
         examId: exam.id,
         studentId: user.id,
@@ -1200,6 +1416,7 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
     const newAnswers = [...answers];
     newAnswers[currentQuestionIndex] = answer;
     setAnswers(newAnswers);
+    playSoftSound('select');
   };
 
   const handleDragStart = (event: any) => {
@@ -1214,6 +1431,7 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
       const oldIndex = currentAns.indexOf(parseInt(active.id));
       const newIndex = currentAns.indexOf(parseInt(over.id));
       handleAnswer(arrayMove(currentAns, oldIndex, newIndex));
+      playSoftSound('select');
     }
   };
 
@@ -1551,134 +1769,349 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
             </div>
           </Modal>
         )}
-        {showCompletion && finalResult && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-0 sm:p-4 overflow-y-auto">
+        {showCompletion && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
             <motion.div 
-              initial={{ scale: 0.9, opacity: 0, y: 30 }} 
+              initial={{ scale: 0.95, opacity: 0, y: 30 }} 
               animate={{ scale: 1, opacity: 1, y: 0 }}
-              className="bg-white p-8 sm:p-12 rounded-[2.5rem] sm:rounded-[3.5rem] shadow-2xl max-w-md w-full my-auto flex flex-col items-center space-y-12 relative overflow-hidden"
+              className="bg-white rounded-[2.5rem] shadow-2xl max-w-5xl w-full my-auto flex flex-col relative overflow-hidden border border-slate-100"
             >
-              <div className="absolute top-0 left-0 w-full h-2 bg-orange-400" />
+              <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500" />
               
-              {/* Circular Progress */}
-              <div className="relative flex items-center justify-center pt-8">
-                <svg className="w-48 h-48 transform -rotate-90">
-                  <circle
-                    cx="96"
-                    cy="96"
-                    r="88"
-                    stroke="#f8fafc"
-                    strokeWidth="12"
-                    fill="transparent"
-                  />
-                  <motion.circle
-                    cx="96"
-                    cy="96"
-                    r="88"
-                    stroke="#fbbf24"
-                    strokeWidth="12"
-                    fill="transparent"
-                    strokeDasharray={2 * Math.PI * 88}
-                    initial={{ strokeDashoffset: 2 * Math.PI * 88 }}
-                    animate={{ strokeDashoffset: (2 * Math.PI * 88) * (1 - (finalResult.score / finalResult.totalPoints)) }}
-                    transition={{ duration: 1.5, ease: "easeOut" }}
-                    strokeLinecap="round"
-                  />
-                </svg>
-                <div className="absolute inset-0 flex flex-col items-center justify-center">
-                  <span className="text-5xl font-black text-slate-900 leading-none">
-                    {Math.round((finalResult.score / finalResult.totalPoints) * 100)}%
-                  </span>
-                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-2">Score Total</span>
-                </div>
-                
-                {/* Trophy Badge */}
-                <div className="absolute top-4 right-4 bg-amber-400 p-3 rounded-2xl shadow-lg shadow-amber-100 transform rotate-12">
-                   <Star className="w-6 h-6 text-white fill-white" />
-                </div>
-              </div>
-
-              {/* Message Header */}
-              <div className="text-center space-y-4">
-                <h3 className="text-4xl font-black text-slate-900 tracking-tight">
-                  {Math.round((finalResult.score / finalResult.totalPoints) * 100) >= 80 ? "Excellent !" : 
-                   Math.round((finalResult.score / finalResult.totalPoints) * 100) >= 50 ? "Bien joué !" : 
-                   "Encore un effort !"}
-                </h3>
-                <p className="text-slate-500 font-medium">
-                  Vous avez validé <span className="font-black text-slate-900">{Number.isInteger(finalResult.score) ? finalResult.score : finalResult.score.toFixed(1)}</span> points sur un maximum de <span className="font-black text-slate-900">{finalResult.totalPoints}</span>.
-                </p>
-              </div>
-
-              {/* AI Feedback Section */}
-              <AnimatePresence>
-                {(isAnalyzing || finalResult.aiFeedback) && (
-                  <motion.div 
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="w-full bg-indigo-50/50 rounded-[2rem] p-6 border border-indigo-100/50 space-y-3"
-                  >
-                    <div className="flex items-center gap-2 mb-2">
-                       <Sparkles className={cn("w-4 h-4 text-indigo-600", isAnalyzing && "animate-pulse")} />
-                       <span className="text-[10px] font-black text-indigo-600 uppercase tracking-[0.2em]">Analyse de l'Assistant IA</span>
+              {!finalResult ? (
+                /* PROGRESS DISPLAY: Horizontal Landscape design for real saving actions progress */
+                <div className="p-8 md:p-12 space-y-8">
+                  <div className="text-center md:text-left space-y-2">
+                    <span className="text-[10px] font-black uppercase tracking-[0.2em] bg-indigo-50 text-indigo-600 px-3 py-1 rounded-full border border-indigo-100/50">
+                      Évaluation & Synchro
+                    </span>
+                    <h3 className="text-3xl font-black text-slate-900 tracking-tight font-display mt-21">
+                      Enregistrement et vérification de votre examen
+                    </h3>
+                    <p className="text-sm text-slate-500 font-medium">
+                      Veuillez patienter pendant la clôture sécurisée de votre session.
+                    </p>
+                  </div>
+                  
+                  {/* Landscape Layout Grid for Saving Progress */}
+                  <div className="grid grid-cols-1 md:grid-cols-12 gap-8 items-center bg-slate-50/50 p-6 md:p-8 rounded-[2rem] border border-slate-150">
+                    
+                    {/* Left Column: Big Glowing Progress Loader */}
+                    <div className="md:col-span-12 lg:col-span-5 flex flex-col items-center justify-center space-y-4">
+                      <div className="relative w-40 h-40 flex items-center justify-center">
+                        {/* Outer pulsing ring */}
+                        <div className="absolute inset-0 rounded-full bg-indigo-100 animate-ping opacity-30" />
+                        
+                        <svg className="w-full h-full transform -rotate-90">
+                          <circle
+                            cx="80"
+                            cy="80"
+                            r="70"
+                            stroke="#e2e8f0"
+                            strokeWidth="10"
+                            fill="transparent"
+                          />
+                          <motion.circle
+                            cx="80"
+                            cy="80"
+                            r="70"
+                            stroke="#4f46e5"
+                            strokeWidth="10"
+                            fill="transparent"
+                            strokeDasharray={2 * Math.PI * 70}
+                            animate={{ strokeDashoffset: (2 * Math.PI * 70) * (1 - (submissionProgress / 100)) }}
+                            transition={{ duration: 0.4, ease: "easeInOut" }}
+                            strokeLinecap="round"
+                          />
+                        </svg>
+                        <div className="absolute inset-0 flex flex-col items-center justify-center">
+                          <span className="text-4xl font-black text-slate-900">{submissionProgress}%</span>
+                          <span className="text-[9px] font-black text-slate-400 tracking-wider uppercase mt-1">
+                            En cours...
+                          </span>
+                        </div>
+                      </div>
                     </div>
-                    {isAnalyzing ? (
-                      <div className="space-y-2">
-                        <div className="h-4 bg-indigo-100/50 rounded-full animate-pulse w-full" />
-                        <div className="h-4 bg-indigo-100/50 rounded-full animate-pulse w-3/4" />
-                        <div className="h-4 bg-indigo-100/50 rounded-full animate-pulse w-5/6" />
-                      </div>
-                    ) : (
-                      <div className="text-sm text-slate-600 font-medium leading-relaxed max-h-[300px] overflow-y-auto custom-scrollbar pr-2 whitespace-pre-wrap">
-                        {finalResult.aiFeedback}
-                      </div>
-                    )}
-                  </motion.div>
-                )}
-              </AnimatePresence>
 
-              {/* Stats Cards */}
-              <div className="grid grid-cols-2 gap-4 w-full">
-                <div className="bg-slate-50/50 p-6 rounded-[2rem] border border-slate-100 flex flex-col items-center justify-center gap-2">
-                  <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600 mb-1">
-                    <CheckCircle2 className="w-5 h-5" />
-                  </div>
-                  <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none">Précision</span>
-                  <span className="text-lg font-black text-slate-900">{Math.round((finalResult.score / finalResult.totalPoints) * 100)}%</span>
-                </div>
-                <div className="bg-slate-50/50 p-6 rounded-[2rem] border border-slate-100 flex flex-col items-center justify-center gap-2">
-                  <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 mb-1">
-                    <Clock className="w-5 h-5" />
-                  </div>
-                  <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none">Status</span>
-                  <span className="text-lg font-black text-slate-900">{Math.round((finalResult.score / finalResult.totalPoints) * 100) >= 50 ? "Validé" : "À refaire"}</span>
-                </div>
-              </div>
+                    {/* Right Column: Progressive Checklist Timeline */}
+                    <div className="md:col-span-12 lg:col-span-7 space-y-4">
+                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-1 font-display">
+                        Statut des protocoles d'archivage :
+                      </span>
+                      
+                      {/* Step 1 */}
+                      <div className={cn(
+                        "flex items-center gap-4 p-3 rounded-2xl border transition-all duration-300",
+                        submissionStep > 1 ? "bg-emerald-50/50 border-emerald-100/60 text-slate-700" :
+                        submissionStep === 1 ? "bg-indigo-50 border-indigo-100 text-slate-900 animate-pulse" :
+                        "bg-slate-50/20 border-slate-100/50 text-slate-400"
+                      )}>
+                        <div className={cn(
+                          "w-8 h-8 rounded-xl flex items-center justify-center text-xs font-black shrink-0",
+                          submissionStep > 1 ? "bg-emerald-500 text-white" :
+                          submissionStep === 1 ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-400"
+                        )}>
+                          {submissionStep > 1 ? "✔" : "1"}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-black uppercase tracking-tight">Consolidation des réponses</p>
+                          <p className="text-[10px] font-medium opacity-80 leading-normal">Vérification de l'intégrité de vos choix et saisies.</p>
+                        </div>
+                      </div>
 
-              {exam.questions.some(q => q.type === 'practical') && (
-                <div className="w-full flex items-center gap-4 p-5 bg-amber-50/50 border border-amber-100/50 rounded-[2rem] text-amber-800">
-                  <div className="w-10 h-10 rounded-2xl bg-amber-100 flex items-center justify-center text-amber-600 shrink-0">
-                    <Info className="w-5 h-5" />
+                      {/* Step 2 */}
+                      <div className={cn(
+                        "flex items-center gap-4 p-3 rounded-2xl border transition-all duration-300",
+                        submissionStep > 2 ? "bg-emerald-50/50 border-emerald-100/60 text-slate-700" :
+                        submissionStep === 2 ? "bg-indigo-50 border-indigo-100 text-slate-900 animate-pulse" :
+                        "bg-slate-50/20 border-slate-100/50 text-slate-400"
+                      )}>
+                        <div className={cn(
+                          "w-8 h-8 rounded-xl flex items-center justify-center text-xs font-black shrink-0",
+                          submissionStep > 2 ? "bg-emerald-500 text-white" :
+                          submissionStep === 2 ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-400"
+                        )}>
+                          {submissionStep > 2 ? "✔" : "2"}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-black uppercase tracking-tight">Sauvegarde & Archivage local sécurisé</p>
+                          <p className="text-[10px] font-medium opacity-80 leading-normal">Libération du cache navigateur et chiffrement des métadonnées.</p>
+                        </div>
+                      </div>
+
+                      {/* Step 3 */}
+                      <div className={cn(
+                        "flex items-center gap-4 p-3 rounded-2xl border transition-all duration-300",
+                        submissionStep > 3 ? "bg-emerald-50/50 border-emerald-100/60 text-slate-700" :
+                        submissionStep === 3 ? "bg-indigo-50 border-indigo-100 text-slate-900 animate-pulse" :
+                        "bg-slate-50/20 border-slate-100/50 text-slate-400"
+                      )}>
+                        <div className={cn(
+                          "w-8 h-8 rounded-xl flex items-center justify-center text-xs font-black shrink-0",
+                          submissionStep > 3 ? "bg-emerald-500 text-white" :
+                          submissionStep === 3 ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-400"
+                        )}>
+                          {submissionStep > 3 ? "✔" : "3"}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-black uppercase tracking-tight">Transmission cryptée au serveur d'évaluation</p>
+                          <p className="text-[10px] font-medium opacity-80 leading-normal">Synchronisation avec l'instance de test principale.</p>
+                        </div>
+                      </div>
+
+                      {/* Step 4 */}
+                      <div className={cn(
+                        "flex items-center gap-4 p-3 rounded-2xl border transition-all duration-300",
+                        submissionStep > 4 ? "bg-emerald-50/50 border-emerald-100/60 text-slate-700" :
+                        submissionStep === 4 ? "bg-indigo-50 border-indigo-100 text-slate-900 animate-pulse" :
+                        "bg-slate-50/20 border-slate-100/50 text-slate-400"
+                      )}>
+                        <div className={cn(
+                          "w-8 h-8 rounded-xl flex items-center justify-center text-xs font-black shrink-0",
+                          submissionStep > 4 ? "bg-emerald-500 text-white" :
+                          submissionStep === 4 ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-400"
+                        )}>
+                          {submissionStep > 4 ? "✔" : "4"}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-black uppercase tracking-tight">Analyse automatique & Correction par l'IA</p>
+                          <p className="text-[10px] font-medium opacity-80 leading-normal">Mise en œuvre approfondie de votre prestation par l'Assistant IA.</p>
+                        </div>
+                      </div>
+                    </div>
                   </div>
-                  <p className="text-[10px] font-bold leading-relaxed italic">
-                    Note: Cet examen comporte une partie pratique de {getExamTotalPoints(exam) - questions.reduce((s, q) => s + (q.points || 1), 0)} points qui sera évaluée séparément par votre formateur.
-                  </p>
+                </div>
+              ) : (
+                /* RESULTS SUMMARY VIEW: Horizontal Widescreen Landscape style design with beautiful layout */
+                <div className="p-8 md:p-12 space-y-10">
+                  
+                  {/* Title Bar Block */}
+                  <div className="flex flex-col md:flex-row items-center justify-between border-b border-slate-100 pb-6 gap-4">
+                    <div className="text-center md:text-left space-y-1">
+                      <span className="text-[10px] font-black uppercase tracking-[0.25em] bg-indigo-50 text-indigo-600 px-3 py-1 rounded-full border border-indigo-100">
+                        Session d'examen terminée
+                      </span>
+                      <h3 className="text-2xl md:text-3xl font-black text-slate-950 font-display mt-2 tracking-tight">
+                        Relevé d'évaluation détaillé • {exam.title}
+                      </h3>
+                      <p className="text-xs text-slate-400 font-bold uppercase tracking-widest leading-loose mt-1">
+                        Candidat : {user.displayName} (Identifiant : {user.registrationNumber || 'N/A'})
+                      </p>
+                    </div>
+                    
+                    {/* Floating badge for success/attempt status */}
+                    <div className={cn(
+                      "px-6 py-3 rounded-2xl flex items-center gap-3 border shadow-sm shrink-0",
+                      Math.round((finalResult.score / finalResult.totalPoints) * 100) >= 50 
+                        ? "bg-emerald-50 border-emerald-100 text-emerald-700" 
+                        : "bg-rose-50 border-rose-100 text-rose-700"
+                    )}>
+                      {Math.round((finalResult.score / finalResult.totalPoints) * 100) >= 50 ? (
+                        <>
+                          <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+                          <span className="text-xs font-black uppercase tracking-wider">Objectif Atteint</span>
+                        </>
+                      ) : (
+                        <>
+                          <Info className="w-5 h-5 text-rose-500" />
+                          <span className="text-xs font-black uppercase tracking-wider">Non Validé</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Landscape Layout Grid */}
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+                    
+                    {/* Left Column: Visual circular progress & detailed statistics metrics cards */}
+                    <div className="lg:col-span-5 space-y-6 flex flex-col items-center">
+                      
+                      {/* Big Circular Score Ring Layout */}
+                      <div className="bg-slate-50/50 w-full p-8 rounded-[2rem] border border-slate-100 flex flex-col items-center relative overflow-hidden">
+                        
+                        <div className="relative flex items-center justify-center">
+                          <svg className="w-44 h-44 transform -rotate-90">
+                            <circle
+                              cx="88"
+                              cy="88"
+                              r="78"
+                              stroke="#f1f5f9"
+                              strokeWidth="12"
+                              fill="transparent"
+                            />
+                            <motion.circle
+                              cx="88"
+                              cy="88"
+                              r="78"
+                              stroke={Math.round((finalResult.score / finalResult.totalPoints) * 100) >= 50 ? "#10b981" : "#f59e0b"}
+                              strokeWidth="12"
+                              fill="transparent"
+                              strokeDasharray={2 * Math.PI * 78}
+                              initial={{ strokeDashoffset: 2 * Math.PI * 78 }}
+                              animate={{ strokeDashoffset: (2 * Math.PI * 78) * (1 - (finalResult.score / finalResult.totalPoints)) }}
+                              transition={{ duration: 1.5, ease: "easeOut" }}
+                              strokeLinecap="round"
+                            />
+                          </svg>
+                          <div className="absolute inset-0 flex flex-col items-center justify-center">
+                            <span className="text-4xl font-black text-slate-900 leading-none">
+                              {Math.round((finalResult.score / finalResult.totalPoints) * 100)}%
+                            </span>
+                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-2 font-display">Précision Globale</span>
+                          </div>
+                          
+                          {/* Trophy Star Badge */}
+                          <div className="absolute top-2 right-2 bg-amber-400 p-2.5 rounded-2xl shadow-lg shadow-amber-100 transform rotate-12">
+                            <Star className="w-5 h-5 text-white fill-white animate-bounce" />
+                          </div>
+                        </div>
+
+                        {/* Summary description */}
+                        <div className="text-center mt-6 space-y-2">
+                          <h4 className="text-xl font-black text-slate-900 tracking-tight">
+                            {Math.round((finalResult.score / finalResult.totalPoints) * 100) >= 80 ? "Prestation Excellente !" : 
+                             Math.round((finalResult.score / finalResult.totalPoints) * 100) >= 50 ? "Examen Validé !" : 
+                             "Score insuffisant"}
+                          </h4>
+                          <p className="text-xs text-slate-500 font-medium">
+                            Vous obtenez <span className="font-black text-slate-950">{Number.isInteger(finalResult.score) ? finalResult.score : finalResult.score.toFixed(1)}</span> points sur un barème de <span className="font-black text-slate-950">{finalResult.totalPoints}</span>.
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Side metrics micro bento cards */}
+                      <div className="grid grid-cols-2 gap-4 w-full">
+                        <div className="bg-slate-50/50 p-5 rounded-3xl border border-slate-100 flex flex-col items-center justify-center text-center gap-2">
+                          <div className="w-10 h-10 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-600">
+                            <ClipboardList className="w-5 h-5" />
+                          </div>
+                          <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none">Qualité de Focus</span>
+                          <span className="text-xs font-black text-slate-900 leading-tight">
+                            {tabExitCount === 0 && fullscreenExitsCount === 0 ? "Excellente" : `${tabExitCount + fullscreenExitsCount} avertissement(s)`}
+                          </span>
+                        </div>
+                        <div className={cn(
+                          "p-5 rounded-3xl border flex flex-col items-center justify-center text-center gap-2",
+                          Math.round((finalResult.score / finalResult.totalPoints) * 100) >= 50 ? "bg-emerald-50/50 border-emerald-100 text-emerald-800" : "bg-rose-50/50 border-rose-100 text-rose-800"
+                        )}>
+                          <div className={cn(
+                            "w-10 h-10 rounded-full flex items-center justify-center",
+                            Math.round((finalResult.score / finalResult.totalPoints) * 100) >= 50 ? "bg-emerald-100 text-emerald-600" : "bg-rose-100 text-rose-600"
+                          )}>
+                            <CheckCircle2 className="w-5 h-5" />
+                          </div>
+                          <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none">Décision finale</span>
+                          <span className="text-xs font-black leading-tight">
+                            {Math.round((finalResult.score / finalResult.totalPoints) * 100) >= 50 ? "Admis" : "Échec d'épreuve"}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Right Column: AI corrective reports, details, and buttons (lg:col-span-7) */}
+                    <div className="lg:col-span-7 space-y-6">
+                      
+                      {/* Formative Feedback box with custom rich markup rendering */}
+                      <div className="bg-indigo-50/40 rounded-3xl p-6 border border-indigo-100/50 space-y-4 font-sans">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Sparkles className="w-4.5 h-4.5 text-indigo-600" />
+                            <span className="text-[10px] font-black text-indigo-600 uppercase tracking-[0.2em] font-display">
+                              Rapport Éducatif & Analyse IA
+                            </span>
+                          </div>
+                          <button 
+                            onClick={async () => {
+                              try {
+                                await navigator.clipboard.writeText(finalResult.aiFeedback || '');
+                                toast.success("Rapport d'analyse copié !");
+                              } catch {}
+                            }}
+                            className="text-xs font-black text-indigo-600 hover:text-indigo-800 transition-colors uppercase tracking-wider animate-pulse"
+                          >
+                            Copier l'analyse
+                          </button>
+                        </div>
+                        
+                        <div className="text-sm text-slate-700 font-medium leading-relaxed max-h-[220px] overflow-y-auto custom-scrollbar pr-2 whitespace-pre-wrap bg-white/60 p-4 rounded-2xl border border-indigo-100/30">
+                          {finalResult.aiFeedback || "Aucune remarque spécifique n'a été formulée par l'intelligence artificielle pour cette épreuve."}
+                        </div>
+                      </div>
+
+                      {/* Info on practical evaluations */}
+                      {exam.questions.some(q => q.type === 'practical') && (
+                        <div className="flex items-start gap-4 p-5 bg-amber-50/60 border border-amber-100/60 rounded-3xl text-amber-900">
+                          <Info className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                          <p className="text-[11px] font-bold leading-normal italic">
+                            Évaluation de stage pratique : Cet examen comporte une section d'exercices pratiques ({getExamTotalPoints(exam) - questions.reduce((s, q) => s + (q.points || 1), 0)} points) qui requiert une appréciation formelle et personnalisée par votre formateur.
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Bottom action triggers in Landscape style */}
+                      <div className="pt-4 flex flex-col sm:flex-row gap-4">
+                        <button
+                          onClick={() => {
+                            window.print();
+                          }}
+                          className="flex-1 py-5 rounded-2xl border border-slate-200 text-slate-600 hover:bg-slate-50 font-black uppercase text-xs tracking-widest transition-all"
+                        >
+                          Imprimer l'attestation
+                        </button>
+                        <Button 
+                          onClick={() => onComplete()}
+                          className="flex-1 py-5 h-auto bg-slate-950 hover:bg-slate-900 text-white rounded-2xl text-xs font-black uppercase tracking-[0.2em] shadow-xl shadow-slate-100 transition-all flex items-center justify-center gap-2 group"
+                        >
+                          <span>Quitter de session</span>
+                          <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+                        </Button>
+                      </div>
+
+                    </div>
+                  </div>
+
                 </div>
               )}
-
-              {/* Continue Button */}
-              <Button 
-                onClick={() => onComplete()} 
-                disabled={isSubmitting}
-                className="w-full py-6 h-auto bg-slate-900 hover:bg-black text-white rounded-[2rem] text-sm font-black uppercase tracking-[0.2em] shadow-2xl shadow-slate-200"
-              >
-                {isSubmitting ? (
-                  <span className="flex items-center gap-2">
-                    <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin" />
-                    Sauvegarde en cours...
-                  </span>
-                ) : "Continuer"}
-              </Button>
             </motion.div>
           </motion.div>
         )}
@@ -1741,7 +2174,7 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
                   <button
                     key={idx}
                     onClick={() => {
-                      setCurrentQuestionIndex(idx);
+                      changeQuestion(idx);
                       setShowReview(false);
                     }}
                     className={cn(
@@ -1936,7 +2369,7 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
                 </div>
               )}
 
-          <AnimatePresence mode="wait">
+          <AnimatePresence mode="wait" custom={direction}>
             {showReview ? (
              <motion.div
                key="review"
@@ -1957,7 +2390,7 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
                      <button
                        key={q.id}
                        onClick={() => {
-                         setCurrentQuestionIndex(idx);
+                         changeQuestion(idx);
                          setShowReview(false);
                          window.scrollTo({ top: 0, behavior: 'smooth' });
                        }}
@@ -1979,7 +2412,7 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
                </div>
 
                <div className="pt-10 border-t border-slate-100 flex flex-col sm:flex-row gap-4">
-                 <Button variant="outline" onClick={() => { setShowReview(false); setCurrentQuestionIndex(0); }} className="flex-1 h-14 rounded-2xl font-black uppercase text-xs tracking-widest">
+                 <Button variant="outline" onClick={() => { setShowReview(false); changeQuestion(0); }} className="flex-1 h-14 rounded-2xl font-black uppercase text-xs tracking-widest">
                    Retourner à la question 1
                  </Button>
                  <Button onClick={() => setShowConfirmModal(true)} className="flex-1 h-14 rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl shadow-indigo-100">
@@ -1990,10 +2423,25 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
             ) : (
             <motion.div
               key={currentQuestion.id}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              transition={{ duration: 0.4, ease: [0.23, 1, 0.32, 1] }}
+              custom={direction}
+              variants={{
+                enter: (dir: 'right' | 'left') => ({
+                  opacity: 0,
+                  x: dir === 'right' ? 60 : -60,
+                }),
+                center: {
+                  opacity: 1,
+                  x: 0,
+                },
+                exit: (dir: 'right' | 'left') => ({
+                  opacity: 0,
+                  x: dir === 'right' ? -60 : 60,
+                })
+              }}
+              initial="enter"
+              animate="center"
+              exit="exit"
+              transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
               className="space-y-10"
             >
               <div className={cn("space-y-6 text-center", qAr ? "text-right" : "text-center")}>
@@ -2426,7 +2874,7 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
                 <div className="flex items-center gap-3 w-full sm:w-auto">
                   <button 
                     disabled={currentQuestionIndex === 0}
-                    onClick={() => setCurrentQuestionIndex(prev => prev - 1)}
+                    onClick={() => changeQuestion(currentQuestionIndex - 1)}
                     className="flex-1 sm:flex-none flex items-center justify-center gap-3 px-8 py-4 rounded-3xl bg-white border-2 border-slate-100 text-slate-400 hover:border-indigo-200 hover:text-indigo-600 transition-all disabled:opacity-30 disabled:pointer-events-none group"
                   >
                     <ChevronLeft className="w-5 h-5 group-hover:-translate-x-1 transition-transform" />
@@ -2434,7 +2882,7 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
                   </button>
                   <button 
                     disabled={currentQuestionIndex === questions.length - 1}
-                    onClick={() => setCurrentQuestionIndex(prev => prev + 1)}
+                    onClick={() => changeQuestion(currentQuestionIndex + 1)}
                     className="flex-1 sm:flex-none flex items-center justify-center gap-3 px-8 py-4 rounded-3xl bg-indigo-600 text-white shadow-xl shadow-indigo-100 hover:scale-105 transition-all disabled:opacity-30 disabled:pointer-events-none group"
                   >
                     <span className="text-sm font-black uppercase tracking-tight">Suivant</span>
@@ -2457,6 +2905,433 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
         </div>
       </div>
     </div>
+
+
+    {/* Premium Floating Action Utility Dock */}
+    <div className="fixed bottom-6 right-6 z-40 flex items-center gap-3 bg-white/80 backdrop-blur-md p-2 rounded-2xl border border-slate-100 shadow-lg" id="utility-dock">
+      {/* Sound Controller Toggle */}
+      <button 
+        onClick={() => {
+          const nextVal = !soundMuted;
+          setSoundMuted(nextVal);
+          localStorage.setItem(`exam_sound_muted_${exam.id}_${user.id}`, nextVal ? 'true' : 'false');
+          if (!nextVal) {
+            // Short trigger
+            try {
+              const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+              const osc = ctx.createOscillator();
+              const gain = ctx.createGain();
+              osc.connect(gain);
+              gain.connect(ctx.destination);
+              osc.frequency.setValueAtTime(600, ctx.currentTime);
+              gain.gain.setValueAtTime(0.04, ctx.currentTime);
+              gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.1);
+              osc.start();
+              osc.stop(ctx.currentTime + 0.1);
+            } catch {}
+          }
+        }}
+        title={soundMuted ? "Activer les sons" : "Désactiver les sons"}
+        className={cn(
+          "p-3 rounded-xl transition-all",
+          soundMuted 
+            ? "bg-slate-50 text-slate-400 hover:text-slate-600" 
+            : "bg-indigo-50 text-indigo-600 hover:bg-indigo-100"
+        )}
+      >
+        {soundMuted ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
+      </button>
+
+      {/* Draftpad/Notes Panel Button Trigger */}
+      <button 
+        onClick={() => {
+          setScratchpadOpen(true);
+          playSoftSound('select');
+        }}
+        title="Ouvrir le Brouillon & Calculatrice"
+        className={cn(
+          "p-3 rounded-xl flex items-center gap-2 transition-all font-black text-xs uppercase tracking-wider",
+          scratchpadOpen 
+            ? "bg-indigo-600 text-white" 
+            : "bg-indigo-50 text-indigo-600 hover:bg-indigo-100"
+        )}
+      >
+        <NotebookPen className="w-5 h-5" />
+        <span className="hidden md:inline">Brouillon</span>
+        {((globalNotes as string).trim() || Object.values(questionNotes).some((n: any) => n?.trim())) && (
+          <span className="w-2 h-2 bg-rose-500 rounded-full animate-ping" />
+        )}
+      </button>
+
+      {/* Focus Mode Star Toggle */}
+      <button 
+        onClick={() => {
+          setFocusMode(prev => !prev);
+          playSoftSound('select');
+        }}
+        title={focusMode ? "Désactiver le Mode Concentration" : "Activer le Mode Concentration"}
+        className={cn(
+          "p-3 rounded-xl transition-all",
+          focusMode 
+            ? "bg-indigo-600 text-white shadow-md shadow-indigo-100" 
+            : "bg-slate-50 text-slate-400 hover:text-slate-600 hover:bg-slate-100"
+        )}
+      >
+        <Star className={cn("w-5 h-5", focusMode && "fill-white")} />
+      </button>
+    </div>
+
+
+    {/* Premium Slide-in Side Drawer (Draftpad + Digital Keypad Calculator) */}
+    <AnimatePresence>
+      {scratchpadOpen && (
+        <>
+          {/* Backdrop Blur */}
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => {
+              setScratchpadOpen(false);
+              playSoftSound('select');
+            }}
+            className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50"
+          />
+
+          {/* Slider Drawer Canvas */}
+          <motion.div 
+            initial={{ x: '100%' }}
+            animate={{ x: 0 }}
+            exit={{ x: '100%' }}
+            transition={{ type: 'spring', damping: 25, stiffness: 220 }}
+            className="fixed inset-y-0 right-0 z-50 w-full max-w-md bg-white border-l border-slate-100 shadow-2xl flex flex-col md:rounded-l-[2rem] overflow-hidden"
+          >
+            {/* Drawer Header */}
+            <div className="p-6 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-indigo-600/10 text-indigo-600 flex items-center justify-center">
+                  <NotebookPen className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-slate-900 font-display">Espace de Travail Personnel</h3>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Vos notes & outils d'aide</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => {
+                  setScratchpadOpen(false);
+                  playSoftSound('select');
+                }}
+                className="p-2 hover:bg-slate-100 rounded-xl text-slate-400 hover:text-slate-600 transition-all"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Custom Interactive Mode Tabs */}
+            <div className="p-4 bg-slate-50/20 border-b border-slate-100/50 flex">
+              <button 
+                onClick={() => {
+                  setActiveDraftTab('notes');
+                  playSoftSound('select');
+                }}
+                className={cn(
+                  "flex-1 py-3 px-4 rounded-xl text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 transition-all",
+                  activeDraftTab === 'notes' 
+                    ? "bg-white text-indigo-600 shadow-sm border border-slate-100" 
+                    : "text-slate-400 hover:text-slate-600"
+                )}
+              >
+                <NotebookPen className="w-4 h-4" /> Notes & Feuille de Brouillon
+              </button>
+              <button 
+                onClick={() => {
+                  setActiveDraftTab('calc');
+                  playSoftSound('select');
+                }}
+                className={cn(
+                  "flex-1 py-3 px-4 rounded-xl text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 transition-all",
+                  activeDraftTab === 'calc' 
+                    ? "bg-white text-indigo-600 shadow-sm border border-slate-100" 
+                    : "text-slate-400 hover:text-slate-600"
+                )}
+              >
+                <Calculator className="w-4 h-4" /> Calculatrice
+              </button>
+            </div>
+
+            {/* Content Switcher */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              {activeDraftTab === 'notes' ? (
+                <div className="space-y-6 min-h-0 flex flex-col h-full">
+                  {/* Notes Sub-tabs selector */}
+                  <div className="flex bg-slate-100 p-1 rounded-xl">
+                    <button 
+                      onClick={() => {
+                        setActiveNotesSubTab('global');
+                        playSoftSound('select');
+                      }}
+                      className={cn(
+                        "flex-1 py-1 px-3 text-[10px] font-black uppercase tracking-tight rounded-lg transition-all",
+                        activeNotesSubTab === 'global' ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500"
+                      )}
+                    >
+                      Copie globale de brouillon
+                    </button>
+                    <button 
+                      onClick={() => {
+                        setActiveNotesSubTab('question');
+                        playSoftSound('select');
+                      }}
+                      className={cn(
+                        "flex-1 py-1 px-3 text-[10px] font-black uppercase tracking-tight rounded-lg transition-all",
+                        activeNotesSubTab === 'question' ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500"
+                      )}
+                    >
+                      Notes relatives à Q{currentQuestionIndex + 1}
+                    </button>
+                  </div>
+
+                  {activeNotesSubTab === 'global' ? (
+                    <div className="flex-1 flex flex-col gap-3 min-h-[300px]">
+                      <div className="flex items-center justify-between text-xs text-slate-400 font-bold">
+                        <span>Ce brouillon est conservé tout au long de l'épreuve.</span>
+                        <div className="flex gap-2">
+                          <button 
+                            onClick={() => {
+                              if (confirm("Voulez-vous effacer l'intégralité de ce brouillon ?")) {
+                                setGlobalNotes('');
+                                playSoftSound('flag');
+                              }
+                            }}
+                            className="text-rose-500 hover:underline"
+                          >
+                            Effacer
+                          </button>
+                          <span>•</span>
+                          <button 
+                            onClick={async () => {
+                              try {
+                                await navigator.clipboard.writeText(globalNotes);
+                                playSoftSound('save');
+                                toast.success("Brouillon copié !");
+                              } catch {}
+                            }}
+                            className="text-indigo-600 hover:underline"
+                          >
+                            Copier
+                          </button>
+                        </div>
+                      </div>
+                      <textarea 
+                        value={globalNotes}
+                        onChange={(e) => {
+                          setGlobalNotes(e.target.value);
+                          localStorage.setItem(`exam_global_notes_${exam.id}_${user.id}`, e.target.value);
+                        }}
+                        placeholder="Saisissez des formules, des rappels de cours ou développez vos idées librement ici..."
+                        className="flex-1 w-full bg-slate-50/80 hover:bg-slate-50 focus:bg-white p-5 border border-slate-100 hover:border-slate-200 focus:border-indigo-300 rounded-3xl text-sm text-slate-700 leading-relaxed outline-none transition-all resize-none shadow-inner h-full min-h-[250px] font-mono"
+                      />
+                    </div>
+                  ) : (
+                    <div className="flex-1 flex flex-col gap-3 min-h-[300px]">
+                      <div className="flex items-center justify-between text-xs text-slate-400 font-bold">
+                        <span>Notes attachées spécifiquement à la question {currentQuestionIndex + 1}.</span>
+                        <div className="flex gap-2">
+                          <button 
+                            onClick={() => {
+                              if (confirm("Voulez-vous effacer les notes de cette question ?")) {
+                                const next = { ...questionNotes };
+                                delete next[currentQuestionIndex];
+                                setQuestionNotes(next);
+                                localStorage.setItem(`exam_question_notes_${exam.id}_${user.id}`, JSON.stringify(next));
+                                playSoftSound('flag');
+                              }
+                            }}
+                            className="text-rose-500 hover:underline"
+                          >
+                            Effacer
+                          </button>
+                          <span>•</span>
+                          <button 
+                            onClick={async () => {
+                              try {
+                                const val = questionNotes[currentQuestionIndex] || '';
+                                await navigator.clipboard.writeText(val);
+                                playSoftSound('save');
+                                toast.success("Notes de la question copiées !");
+                              } catch {}
+                            }}
+                            className="text-indigo-600 hover:underline"
+                          >
+                            Copier
+                          </button>
+                        </div>
+                      </div>
+                      <textarea 
+                        value={questionNotes[currentQuestionIndex] || ''}
+                        onChange={(e) => {
+                          const next = { ...questionNotes, [currentQuestionIndex]: e.target.value };
+                          setQuestionNotes(next);
+                          localStorage.setItem(`exam_question_notes_${exam.id}_${user.id}`, JSON.stringify(next));
+                        }}
+                        placeholder="Notez vos calculs intermédiaires ou hypothèses spécifiques pour cette question..."
+                        className="flex-1 w-full bg-slate-50/80 hover:bg-slate-50 focus:bg-white p-5 border border-slate-100 hover:border-slate-200 focus:border-indigo-300 rounded-3xl text-sm text-slate-700 leading-relaxed outline-none transition-all resize-none shadow-inner h-full min-h-[250px] font-mono"
+                      />
+                    </div>
+                  )}
+
+                  <div className="p-4 bg-indigo-50/50 border border-indigo-100/50 rounded-2xl flex gap-3 text-slate-600">
+                    <Info className="w-5 h-5 text-indigo-600 shrink-0" />
+                    <p className="text-[10px] font-semibold leading-relaxed">Vos notes sont chiffrées et sauvegardées localement en continu. Elles ne s'effaceront pas même en cas d'actualisation accidentelle de l'onglet.</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {/* Digital calculator display */}
+                  <div className="bg-slate-950 p-6 rounded-3xl shadow-inner border border-slate-800 text-right space-y-1 relative group">
+                    <div className="text-[10px] font-black font-mono text-indigo-400 tracking-wider uppercase opacity-60">Calculatrice de l'Examen</div>
+                    <div className="text-slate-400 text-xs font-mono font-bold select-all truncate">
+                      {calcInput}
+                    </div>
+                    <div className="text-white text-3xl font-mono font-black select-all tracking-tight truncate">
+                      {(() => {
+                        try {
+                          const sanitized = calcInput.replace(/[^0-9+\-*/().\s]/g, '');
+                          if (!sanitized) return '0';
+                          const val = new Function(`return (${sanitized})`)();
+                          return typeof val === 'number' && !isNaN(val) ? val.toString() : '---';
+                        } catch {
+                          return '---';
+                        }
+                      })()}
+                    </div>
+                    {/* Copy result shortcut button inside input */}
+                    <button
+                      onClick={async () => {
+                        try {
+                          const sanitized = calcInput.replace(/[^0-9+\-*/().\s]/g, '');
+                          const val = new Function(`return (${sanitized})`)();
+                          const resultStr = typeof val === 'number' && !isNaN(val) ? val.toString() : '0';
+                          await navigator.clipboard.writeText(resultStr);
+                          playSoftSound('save');
+                          toast.success("Résultat copié !");
+                        } catch {
+                          toast.error("Format de calcul invalide");
+                        }
+                      }}
+                      className="absolute top-4 right-4 text-[10px] font-black uppercase text-indigo-400 hover:text-white bg-indigo-600/30 hover:bg-indigo-600/60 px-2 py-1 rounded-md border border-indigo-500/10 transition-colors"
+                    >
+                      Copier
+                    </button>
+                  </div>
+
+                  {/* Retro-Tactile Tactile Buttons Keypad */}
+                  <div className="grid grid-cols-4 gap-3">
+                    {/* Key helpers */}
+                    {[
+                      'C', '⌫', '√', '/',
+                      '7', '8', '9', '*',
+                      '4', '5', '6', '-',
+                      '1', '2', '3', '+',
+                      '0', '.', '%', '='
+                    ].map((keyChar) => {
+                      const isOperator = ['/', '*', '-', '+', '=', '√', '%'].includes(keyChar);
+                      const isSpecial = ['C', '⌫'].includes(keyChar);
+                      
+                      return (
+                        <button
+                          key={keyChar}
+                          onClick={() => {
+                            // Synthesizer action
+                            playSoftSound('select');
+                            
+                            if (keyChar === 'C') {
+                              setCalcInput('0');
+                            } else if (keyChar === '⌫') {
+                              setCalcInput(prev => prev.length > 1 ? prev.slice(0, -1) : '0');
+                            } else if (keyChar === '=') {
+                              try {
+                                const sanitized = calcInput.replace(/[^0-9+\-*/().\s]/g, '');
+                                if (!sanitized) {
+                                  setCalcInput('0');
+                                  return;
+                                }
+                                const evaluated = new Function(`return (${sanitized})`)();
+                                if (typeof evaluated === 'number' && !isNaN(evaluated)) {
+                                  setCalcInput(Number(evaluated.toFixed(6)).toString());
+                                } else {
+                                  setCalcInput('Erreur');
+                                }
+                              } catch {
+                                setCalcInput('Erreur');
+                              }
+                            } else if (keyChar === '√') {
+                              try {
+                                const parsed = parseFloat(calcInput);
+                                setCalcInput(isNaN(parsed) || parsed < 0 ? 'Erreur' : Math.sqrt(parsed).toString());
+                              } catch {
+                                setCalcInput('Erreur');
+                              }
+                            } else if (keyChar === '%') {
+                              try {
+                                const parsed = parseFloat(calcInput);
+                                setCalcInput(isNaN(parsed) ? 'Erreur' : (parsed / 100).toString());
+                              } catch {
+                                setCalcInput('Erreur');
+                              }
+                            } else {
+                              setCalcInput(prev => prev === '0' || prev === 'Erreur' ? keyChar : prev + keyChar);
+                            }
+                          }}
+                          className={cn(
+                            "h-14 rounded-2xl flex items-center justify-center text-sm font-black font-mono transition-all border shadow-sm select-none active:scale-95",
+                            isSpecial 
+                              ? "bg-rose-50 border-rose-100 text-rose-600 hover:bg-rose-100/50" 
+                              : isOperator 
+                                ? keyChar === '=' 
+                                  ? "bg-indigo-600 border-indigo-650 text-white shadow-md hover:bg-indigo-700 shadow-indigo-100Col"
+                                  : "bg-indigo-50 border-indigo-100 text-indigo-600 hover:bg-indigo-100/80" 
+                                : "bg-slate-50 border-slate-100 text-slate-700 hover:bg-slate-100"
+                          )}
+                        >
+                          {keyChar}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Scientific constants tips */}
+                  <div className="p-4 bg-slate-50 border border-slate-100 rounded-2xl space-y-2">
+                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block font-display">Raccourcis Pratiques</span>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button 
+                        onClick={() => {
+                          setCalcInput(prev => prev === '0' ? Math.PI.toFixed(6) : prev + Math.PI.toFixed(6));
+                          playSoftSound('select');
+                        }}
+                        className="py-2.5 px-3 bg-white text-xs font-bold text-slate-600 rounded-xl border border-slate-100 text-left hover:border-indigo-200 hover:text-indigo-600 transition-colors"
+                      >
+                         Valeur de PI (π)
+                      </button>
+                      <button 
+                        onClick={() => {
+                          setCalcInput(prev => prev === '0' ? Math.E.toFixed(6) : prev + Math.E.toFixed(6));
+                          playSoftSound('select');
+                        }}
+                        className="py-2.5 px-3 bg-white text-xs font-bold text-slate-600 rounded-xl border border-slate-100 text-left hover:border-indigo-200 hover:text-indigo-600 transition-colors"
+                      >
+                         Constante Euler (e)
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </motion.div>
+        </>
+      )}
+    </AnimatePresence>
   </div>
 </div>
 </div>

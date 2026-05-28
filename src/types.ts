@@ -106,6 +106,10 @@ export interface Result {
   groupName?: string;
   filiere?: string;
   aiFeedback?: string;
+  integrityScore?: number;
+  tabExitCount?: number;
+  fullscreenExitsCount?: number;
+  auditTrail?: { type: string; details: string; timestamp: number }[];
 }
 
 export interface Notification {
@@ -114,8 +118,18 @@ export interface Notification {
   content: string;
   teacherId: number;
   groupId?: number;
+  filiereId?: number;
+  audienceRole?: 'all' | 'students' | 'teachers';
   type?: 'announcement' | 'exam';
   read?: boolean;
+  isPinned?: boolean;
+  importance?: 'normal' | 'low' | 'high';
+  attachmentUrl?: string | null;
+  attachmentName?: string | null;
+  reactions?: { id: number; userId: number; reactionType: string; userDisplayName: string }[];
+  comments?: { id: number; userId: number; userDisplayName: string; userRole: string; content: string; createdAt: string }[];
+  readers?: { id: number; displayName: string; email: string; readAt: string }[];
+  readCount?: number;
   createdAt: string;
 }
 
@@ -131,6 +145,7 @@ export interface HeaderLine {
   isItalic?: boolean;
   alignment?: 'left' | 'center' | 'right';
   fontFamily?: string;
+  logoSource?: 'gauche' | 'droit' | 'custom';
 }
 
 export interface HeaderColumn {
@@ -207,6 +222,9 @@ export interface OrganizationSettings {
   showWatermark?: boolean;
   watermarkColor?: string;
   watermarkOpacity?: number;
+  localAiEnabled?: boolean;
+  localAiUrl?: string;
+  localAiModel?: string;
   updatedAt?: string;
 }
 
@@ -241,4 +259,30 @@ export interface CheatAlertLog {
   type: string;
   details: string;
   timestamp: number;
+}
+
+export interface ChatReaction {
+  id: number;
+  messageId: number;
+  userId: number;
+  userName: string;
+  emoji: string;
+  createdAt: string;
+}
+
+export interface ChatMessage {
+  id: number;
+  senderId: number;
+  senderName: string;
+  senderRole: string;
+  content: string;
+  channelType: 'general' | 'teachers' | 'group';
+  groupId?: number;
+  createdAt: string;
+  reactions?: ChatReaction[];
+  isEdited?: number;
+  isPinned?: number;
+  attachmentUrl?: string | null;
+  attachmentName?: string | null;
+  attachmentType?: string | null;
 }
