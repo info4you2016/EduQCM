@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { api } from '../../lib/api';
 import { 
@@ -46,6 +46,12 @@ export const AdminUserManagement: React.FC = () => {
   const [isAddingUser, setIsAddingUser] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, roleFilter]);
   
   const [filieres, setFilieres] = useState<Filiere[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
@@ -301,6 +307,12 @@ export const AdminUserManagement: React.FC = () => {
     return matchesSearch && matchesRole;
   });
 
+  const totalPages = Math.max(1, Math.ceil(filteredUsers.length / itemsPerPage));
+  const paginatedUsers = useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    return filteredUsers.slice(startIndex, startIndex + itemsPerPage);
+  }, [filteredUsers, currentPage, itemsPerPage]);
+
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
@@ -378,7 +390,7 @@ export const AdminUserManagement: React.FC = () => {
                     <td colSpan={5} className="px-8 py-4"><div className="h-6 bg-slate-100 rounded-lg w-full"></div></td>
                   </tr>
                 ))
-              ) : filteredUsers.length === 0 ? (
+              ) : paginatedUsers.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="px-8 py-20 text-center">
                     <div className="flex flex-col items-center gap-4 text-slate-300">
@@ -388,7 +400,7 @@ export const AdminUserManagement: React.FC = () => {
                   </td>
                 </tr>
               ) : (
-                filteredUsers.map((user) => (
+                paginatedUsers.map((user) => (
                   <motion.tr 
                     key={user.id} 
                     initial={{ opacity: 0 }}
@@ -470,6 +482,53 @@ export const AdminUserManagement: React.FC = () => {
               )}
             </tbody>
           </table>
+        </div>
+
+        <div className="p-5 bg-slate-50 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-4">
+           <div className="flex flex-col sm:flex-row sm:items-center gap-4 w-full sm:w-auto">
+             <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.15em] text-center sm:text-left">
+               Affichage {filteredUsers.length > 0 ? (currentPage - 1) * itemsPerPage + 1 : 0} à {Math.min(currentPage * itemsPerPage, filteredUsers.length)} sur {filteredUsers.length} comptes (total: {users.length})
+             </span>
+             <select
+               value={itemsPerPage}
+               onChange={(e) => {
+                 setItemsPerPage(Number(e.target.value));
+                 setCurrentPage(1);
+               }}
+               className="text-[10px] font-black uppercase tracking-widest bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-slate-500 focus:outline-none cursor-pointer hover:border-slate-300 transition-colors w-full sm:w-auto text-center"
+             >
+               <option value={10}>10 par page</option>
+               <option value={20}>20 par page</option>
+               <option value={50}>50 par page</option>
+               <option value={100}>100 par page</option>
+             </select>
+           </div>
+           
+           {totalPages > 1 && (
+             <div className="flex items-center justify-center gap-2 w-full sm:w-auto">
+               <Button 
+                 variant="outline" 
+                 size="sm" 
+                 disabled={currentPage === 1}
+                 onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                 className="h-8 px-4 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all border-slate-200 text-slate-500 hover:text-indigo-600 bg-white"
+               >
+                 Précédent
+               </Button>
+               <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest px-2 min-w-[100px] text-center">
+                 Page {currentPage} sur {totalPages}
+               </span>
+               <Button 
+                 variant="outline" 
+                 size="sm" 
+                 disabled={currentPage === totalPages}
+                 onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                 className="h-8 px-4 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all border-slate-200 text-slate-500 hover:text-indigo-600 bg-white"
+               >
+                 Suivant
+               </Button>
+             </div>
+           )}
         </div>
       </Card>
 

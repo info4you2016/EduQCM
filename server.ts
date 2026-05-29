@@ -70,6 +70,61 @@ function getAI() {
   return aiInstance;
 }
 
+async function generateContentWithRetry(params: any, retries: number = 10, delay: number = 1000): Promise<any> {
+  const ai = getAI();
+  let attempt = 0;
+  let currentModel = params.model || "gemini-3.5-flash";
+  
+  while (attempt < retries) {
+    try {
+      const currentParams = { ...params, model: currentModel };
+      return await ai.models.generateContent(currentParams);
+    } catch (err: any) {
+      attempt++;
+      
+      const errStr = (err.message || "").toLowerCase();
+      const isRateLimit = err.status === 429 || 
+                          err.statusCode === 429 ||
+                          (err.statusText && err.statusText.toLowerCase().includes("too many requests")) ||
+                          errStr.includes("429") || 
+                          errStr.includes("rate") || 
+                          errStr.includes("exceeded") || 
+                          errStr.includes("quota") || 
+                          errStr.includes("limit") || 
+                          errStr.includes("exhausted") ||
+                          errStr.includes("resource") ||
+                          errStr.includes("too many requests") ||
+                          errStr.includes("dépassé");
+                          
+      if (isRateLimit) {
+        console.warn(`[Gemini API] Rate Limit or Quota issue on attempt ${attempt}. Switching model if needed and applying backoff with jitter...`);
+      } else {
+        console.error(`[Gemini API] Error on attempt ${attempt}:`, err.message || err);
+      }
+      
+      // If we failed with any issue and we are using gemini-3.5-flash, let's use the lite model on subsequent retries
+      if (currentModel === "gemini-3.5-flash") {
+        currentModel = "gemini-3.1-flash-lite";
+      }
+      
+      // Wait for exponential backoff if there are retries left
+      if (attempt < retries) {
+        const baseDelay = isRateLimit ? 3000 : delay;
+        // Exponential backoff capped at 15000ms plus a randomized jitter of 0 to 1500ms 
+        // to prevent synchronized retries ("thundering herd" effect)
+        const exponentialDelay = Math.min(15000, baseDelay * Math.pow(1.8, attempt - 1));
+        const jitter = Math.random() * 1500;
+        const totalDelay = exponentialDelay + jitter;
+        
+        console.log(`[Gemini API] Backing off for ${Math.round(totalDelay)}ms before attempt ${attempt + 1}...`);
+        await new Promise((resolve) => setTimeout(resolve, totalDelay));
+      } else {
+        throw err;
+      }
+    }
+  }
+}
+
 // --- Local Offline AI handler (Ollama/LM Studio etc.) ---
 async function generateWithOllama(ollamaUrl: string, model: string, prompt: string, configSchema: any) {
   const cleanUrl = ollamaUrl.endsWith('/') ? ollamaUrl.slice(0, -1) : ollamaUrl;
@@ -1111,8 +1166,8 @@ async function startServer() {
         return res.json({ text });
       }
 
-      const response = await getAI().models.generateContent({
-        model: "gemini-3-flash-preview",
+      const response = await generateContentWithRetry({
+        model: "gemini-3.5-flash",
         contents: req.body.prompt,
         config: req.body.config
       });
@@ -1151,8 +1206,8 @@ Répond uniquement avec l'objet JSON de la question mise à jour.`;
         return res.json({ text });
       }
 
-      const response = await getAI().models.generateContent({
-        model: "gemini-3-flash-preview",
+      const response = await generateContentWithRetry({
+        model: "gemini-3.5-flash",
         contents: `Améliore cette question d'examen pour la rendre plus claire, professionnelle et sans ambiguïté.
         Conserve le même type de question et le même sens, mais améliore le style et la structure.
         
@@ -1195,8 +1250,8 @@ Répond exclusivement sous ce format JSON : {"score": 0.8}`;
         return res.json({ text });
       }
 
-      const response = await getAI().models.generateContent({
-        model: "gemini-3-flash-preview",
+      const response = await generateContentWithRetry({
+        model: "gemini-3.5-flash",
         contents: `Évalue la réponse de l'étudiant par rapport à la réponse attendue pour la question donnée.
         Question : "${question}"
         Réponse attendue : "${expectedAnswer}"
@@ -1236,8 +1291,8 @@ Rend un commentaire d'évaluation en français structuré sous format JSON : {"t
         return res.json({ text });
       }
 
-      const response = await getAI().models.generateContent({
-        model: "gemini-3-flash-preview",
+      const response = await generateContentWithRetry({
+        model: "gemini-3.5-flash",
         contents: `Tu es un conseiller pédagogique expert. Analyse les résultats d'un étudiant à l'examen "${examTitle}" et fournis un feedback constructif, motivant et personnalisé.
 
 Score final : ${totalScore}/${totalPoints} (${Math.round((totalScore / totalPoints) * 100)}%)
@@ -1280,8 +1335,8 @@ Instructions pour le feedback :
         return res.json({ text });
       }
 
-      const response = await getAI().models.generateContent({
-        model: model || "gemini-3-flash-preview",
+      const response = await generateContentWithRetry({
+        model: model || "gemini-3.5-flash",
         contents: prompt,
         config: config
       });
@@ -2071,6 +2126,75 @@ Instructions pour le feedback :
       const questionResults = [];
       const ai = getAI();
 
+      // Batch evaluate short-answer questions to prevent API rate limits and speed up submission
+      const pendingShortAnswers: any[] = [];
+      const evaluatedScores = new Map<number, number>();
+
+      for (let idx = 0; idx < questions.length; idx++) {
+        const q = questions[idx];
+        if (!q) continue;
+        const ans = answers[idx];
+        if (q.type === 'short-answer') {
+          const studentAns = ans?.toString().trim() || '';
+          const studentAnsPlainText = stripHtml(studentAns);
+          const expectedAns = stripHtml(q.correctAnswer || '').trim();
+          
+          if (normalizeStr(studentAnsPlainText) !== normalizeStr(expectedAns) && studentAnsPlainText && expectedAns) {
+            pendingShortAnswers.push({
+              idx,
+              questionText: stripHtml(q.text || ''),
+              expectedAnswer: expectedAns,
+              studentAnswer: studentAns
+            });
+          }
+        }
+      }
+
+      if (pendingShortAnswers.length > 0) {
+        try {
+          console.log(`[API] Deferring ${pendingShortAnswers.length} short-answer questions for batch AI grading.`);
+          let prompt = "Évalue ces réponses d'étudiants par rapport aux réponses attendues pour chaque question d'examen.\n";
+          prompt += "Donne pour chaque question un score de validation entre 0 et 1 (0 = faux, 1 = parfait, entre les deux pour une réponse partiellement correcte).\n";
+          prompt += "Sois indulgent sur l'orthographe ou de légères fautes de frappe si le sens général est correct.\n\n";
+          prompt += "Liste des réponses à évaluer :\n";
+          
+          pendingShortAnswers.forEach((item, index) => {
+            prompt += `--- Question ${index + 1} (ID unique: ${item.idx}) ---\n`;
+            prompt += `Question : "${item.questionText}"\n`;
+            prompt += `Réponse attendue : "${item.expectedAnswer}"\n`;
+            prompt += `Réponse de l'étudiant : "${item.studentAnswer}"\n\n`;
+          });
+          
+          prompt += "Réponds impérativement au format JSON strict avec un tableau d'objets, chaque objet contenant 'idx' (le nombre ID unique correspondant) et 'score' (un nombre ou flotant entre 0 et 1).\n";
+          prompt += "Format attendu :\n";
+          prompt += "[\n";
+          prompt += "  { \"idx\": 2, \"score\": 0.8 },\n";
+          prompt += "  { \"idx\": 5, \"score\": 0.0 }\n";
+          prompt += "]\n";
+          prompt += "Ne mets aucun texte en dehors du format JSON.";
+
+          const aiResponse = await generateContentWithRetry({
+            model: "gemini-3.5-flash",
+            contents: prompt,
+            config: {
+              responseMimeType: "application/json"
+            }
+          });
+          
+          const responseText = aiResponse.text?.trim() || "[]";
+          const scoresArray = JSON.parse(responseText);
+          if (Array.isArray(scoresArray)) {
+            scoresArray.forEach((item: any) => {
+              if (item && typeof item.idx === 'number' && typeof item.score === 'number') {
+                evaluatedScores.set(item.idx, Math.max(0, Math.min(1, item.score)));
+              }
+            });
+          }
+        } catch (err) {
+          console.error("[API] Error during batch AI evaluation, will fallback to individual question requests:", err);
+        }
+      }
+
       for (let idx = 0; idx < questions.length; idx++) {
         const q = questions[idx];
         const ans = answers[idx];
@@ -2092,28 +2216,34 @@ Instructions pour le feedback :
             isCorrect = true;
             pointsEarned = points;
           } else if (studentAnsPlainText && expectedAns) {
-            try {
-              if (idx > 0) await new Promise(resolve => setTimeout(resolve, 1000));
-              const aiResponse = await ai.models.generateContent({
-                model: "gemini-3-flash-preview",
-                contents: `Évalue la réponse de l'étudiant par rapport à la réponse attendue pour la question donnée.
-                Question : "${stripHtml(q.text)}"
-                Réponse attendue : "${expectedAns}"
-                Réponse de l'étudiant : "${studentAns}"
-                
-                Donne un score entre 0 et 1 (0 = faux, 1 = parfait, entre les deux pour une réponse partiellement correcte).
-                Sois indulgent sur l'orthographe si le sens est correct.
-                Répond uniquement avec le nombre (ex: 0.5 ou 1).`,
-              });
-              const scoreText = aiResponse.text?.trim() || '0';
-              const scoreMultiplier = parseFloat(scoreText);
-              const multiplier = isNaN(scoreMultiplier) ? 0 : Math.max(0, Math.min(1, scoreMultiplier));
+            if (evaluatedScores.has(idx)) {
+              const multiplier = evaluatedScores.get(idx)!;
               pointsEarned = multiplier * points;
               isCorrect = multiplier >= 0.8;
-            } catch (e) {
-              console.error("Evaluation IA backend echouee pour reponse courte:", e);
-              isCorrect = normalizeStr(studentAnsPlainText) === normalizeStr(expectedAns);
-              pointsEarned = isCorrect ? points : 0;
+            } else {
+              try {
+                if (idx > 0) await new Promise(resolve => setTimeout(resolve, 1000));
+                const aiResponse = await generateContentWithRetry({
+                  model: "gemini-3.5-flash",
+                  contents: `Évalue la réponse de l'étudiant par rapport à la réponse attendue pour la question donnée.
+                  Question : "${stripHtml(q.text)}"
+                  Réponse attendue : "${expectedAns}"
+                  Réponse de l'étudiant : "${studentAns}"
+                  
+                  Donne un score entre 0 et 1 (0 = faux, 1 = parfait, entre les deux pour une réponse partiellement correcte).
+                  Sois indulgent sur l'orthographe si le sens est correct.
+                  Répond uniquement avec le nombre (ex: 0.5 ou 1).`,
+                });
+                const scoreText = aiResponse.text?.trim() || '0';
+                const scoreMultiplier = parseFloat(scoreText);
+                const multiplier = isNaN(scoreMultiplier) ? 0 : Math.max(0, Math.min(1, scoreMultiplier));
+                pointsEarned = multiplier * points;
+                isCorrect = multiplier >= 0.8;
+              } catch (e) {
+                console.error("Evaluation IA backend echouee pour reponse courte:", e);
+                isCorrect = normalizeStr(studentAnsPlainText) === normalizeStr(expectedAns);
+                pointsEarned = isCorrect ? points : 0;
+              }
             }
           }
         } else if (q.type === 'fill-in-the-blanks') {
@@ -2154,8 +2284,8 @@ Instructions pour le feedback :
           return `- Question: "${stripHtml(q.text)}" | Résultat: ${res.pointsEarned}/${q.points || 1} | Type: ${q.type}`;
         }).join('\n');
 
-        const feedbackResponse = await ai.models.generateContent({
-          model: "gemini-3-flash-preview",
+        const feedbackResponse = await generateContentWithRetry({
+          model: "gemini-3.5-flash",
           contents: `Tu es un conseiller pédagogique expert. Analyse les résultats d'un étudiant à l'examen "${exam.title}" et fournis un feedback constructif, motivant et personnalisé.
 
 Score final : ${score}/${totalPoints} (${Math.round((score / totalPoints) * 100)}%)
@@ -2176,6 +2306,31 @@ Instructions pour le feedback :
         aiFeedback = feedbackResponse.text?.trim() || "";
       } catch (aiErr) {
         console.error("Feedback AI backend echoue:", aiErr);
+        // Fallback pedagogical feedback if Gemini services are congested/unreachable
+        const pct = Math.round((score / totalPoints) * 100);
+        let feedbackIntro = "";
+        let feedbackPositives = "";
+        let feedbackImprovements = "";
+        let feedbackNext = "";
+
+        if (pct >= 85) {
+          feedbackIntro = "Félicitations pour cet excellent résultat ! Vous avez démontré une maîtrise remarquable des sujets abordés dans cet examen.";
+          feedbackPositives = "- Excellente compréhension globale de la matière.\n- Bonne précision sur l'ensemble des questions.";
+          feedbackImprovements = "- Continuez à maintenir ce niveau d'excellence.\n- Prêtez attention aux détails subtils pour atteindre la perfection.";
+          feedbackNext = "Continuez ainsi, vous êtes sur la excellente voie !";
+        } else if (pct >= 60) {
+          feedbackIntro = "Bon travail ! C'est un résultat satisfaisant qui démontre une bonne assimilation générale des notions essentielles.";
+          feedbackPositives = "- Solide compréhension des bases du cours.\n- Capacité à répondre correctement à la majorité des questions.";
+          feedbackImprovements = "- Révision nécessaire sur certaines questions spécifiques non validées.\n- Consolidation des concepts intermédiaires pour améliorer le score.";
+          feedbackNext = "Un effort ciblé sur vos erreurs vous permettra d'atteindre le niveau supérieur très rapidement.";
+        } else {
+          feedbackIntro = "Ne vous découragez pas ! Ce résultat montre que certains concepts clés nécessitent d'être revus et consolidés.";
+          feedbackPositives = "- Volonté visible de compléter l'intégralité du test.\n- Quelques questions bien maîtrisées qui prouvent votre potentiel.";
+          feedbackImprovements = "- Reprendre le cours théorique pour mieux assimiler les bases.\n- S'exercer de manière répétée sur les types d'exercices échoués.";
+          feedbackNext = "Rapprochez-vous de votre formateur pour éclaircir les zones d'ombre. Avec du travail régulier, vous progressez !";
+        }
+
+        aiFeedback = `${feedbackIntro}\n\n**Points forts :**\n${feedbackPositives}\n\n**Axes d'amélioration :**\n${feedbackImprovements}\n\n**Conseil pour la suite :**\n${feedbackNext}`;
       }
 
       const stmt = db.prepare("INSERT INTO results (examId, studentId, score, totalQuestions, totalPoints, answers, questionResults, aiFeedback, integrityScore, tabExitCount, fullscreenExitsCount, auditTrail) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
@@ -2251,7 +2406,7 @@ Instructions pour le feedback :
             OR (n.filiereId = ? AND n.groupId IS NULL)
           )
         ORDER BY n.isPinned DESC, n.createdAt DESC
-      `).all(req.user.id, req.user.id, req.user.groupId, req.user.filiereId);
+      `).all(req.user.id, req.user.groupId, req.user.filiereId);
     }
 
     // Attach comments, reactions and readers for full interactive and content enrichment

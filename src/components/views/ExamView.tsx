@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   Clock, CheckCircle2, Send, AlertCircle, ArrowRight, ClipboardList, 
   Sparkles, ArrowUp, ArrowDown, GripVertical, Timer, ChevronLeft, ChevronRight,
-  Info, Star, ShieldAlert, Wifi, WifiOff, NotebookPen, Volume2, VolumeX, Calculator, X
+  Info, Star, ShieldAlert, Wifi, WifiOff, NotebookPen, Volume2, VolumeX, Calculator, X,
+  Award, Download, Printer
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { motion, AnimatePresence } from 'motion/react';
@@ -31,6 +33,7 @@ import { Exam, UserProfile } from '../../types';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
 import { Modal } from '../ui/Modal';
+import { AttestationTemplate, printAttestation, downloadAttestationPDF } from '../AttestationTemplate';
 import confetti from 'canvas-confetti';
 
 interface ExamViewProps {
@@ -2088,27 +2091,81 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
                         </div>
                       )}
 
+                      {/* Preview of the official certificate */}
+                      <div className="bg-amber-50/10 border-2 border-dashed border-amber-500/20 rounded-[2rem] p-6 space-y-4">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2 text-amber-700">
+                            <Award className="w-4.5 h-4.5 text-amber-600" />
+                            <span className="text-[10px] font-black uppercase tracking-[0.2em] font-display">
+                              Aperçu de votre Attestation Officielle
+                            </span>
+                          </div>
+                          <span className="text-[9px] font-black uppercase text-amber-700 bg-amber-50 px-2.5 py-1 rounded-xl border border-amber-250/50">
+                            {Math.round((finalResult.score / finalResult.totalPoints) * 100) >= 50 ? 'Réussite' : 'Passage'}
+                          </span>
+                        </div>
+                        
+                        <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-inner bg-slate-50 p-2 md:p-3 max-h-[300px] overflow-y-auto custom-scrollbar">
+                          <AttestationTemplate 
+                            exam={exam} 
+                            result={finalResult} 
+                            user={user} 
+                            moduleName={moduleName} 
+                            isPreview={true} 
+                          />
+                        </div>
+                        <p className="text-[8px] text-slate-400 font-extrabold text-center uppercase tracking-widest leading-none">
+                          La mise en page paysage A4 haute définition sera conservée lors de l'impression
+                        </p>
+                      </div>
+
                       {/* Bottom action triggers in Landscape style */}
-                      <div className="pt-4 flex flex-col sm:flex-row gap-4">
+                      <div className="pt-4 flex flex-col sm:flex-row flex-wrap md:flex-nowrap gap-3">
                         <button
                           onClick={() => {
-                            window.print();
+                            if (finalResult) {
+                              downloadAttestationPDF(exam, finalResult, user, moduleName);
+                            }
                           }}
-                          className="flex-1 py-5 rounded-2xl border border-slate-200 text-slate-600 hover:bg-slate-50 font-black uppercase text-xs tracking-widest transition-all"
+                          className="flex-1 min-w-[140px] py-4 rounded-[1.25rem] border-2 border-indigo-600 bg-indigo-600 hover:bg-indigo-700 text-white font-black uppercase text-xs tracking-widest transition-all flex items-center justify-center gap-2 active:scale-98 shadow-md cursor-pointer"
                         >
-                          Imprimer l'attestation
+                          <Download className="w-4 h-4" />
+                          <span>Télécharger PDF</span>
+                        </button>
+                        <button
+                          onClick={() => {
+                            printAttestation("attestation-export-container");
+                          }}
+                          className="flex-1 min-w-[140px] py-4 rounded-[1.25rem] border-2 border-slate-200 text-slate-700 bg-white hover:bg-slate-50 hover:border-indigo-200 hover:text-indigo-650 font-black uppercase text-xs tracking-widest transition-all flex items-center justify-center gap-2 active:scale-98 cursor-pointer"
+                        >
+                          <Printer className="w-4 h-4 text-slate-400" />
+                          <span>Imprimer</span>
                         </button>
                         <Button 
                           onClick={() => onComplete()}
-                          className="flex-1 py-5 h-auto bg-slate-950 hover:bg-slate-900 text-white rounded-2xl text-xs font-black uppercase tracking-[0.2em] shadow-xl shadow-slate-100 transition-all flex items-center justify-center gap-2 group"
+                          className="flex-1 min-w-[140px] py-4 h-auto bg-slate-950 hover:bg-slate-900 text-white rounded-[1.25rem] text-xs font-black uppercase tracking-[0.2em] shadow-xl shadow-slate-100 transition-all flex items-center justify-center gap-2 group cursor-pointer"
                         >
-                          <span>Quitter de session</span>
+                          <span>Quitter</span>
                           <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
                         </Button>
                       </div>
 
                     </div>
                   </div>
+
+                  {/* Print-only template rendered outside the exam view in a portal to prevent any scale/transform clipping issues in html2canvas */}
+                  {createPortal(
+                    <div className="absolute top-0 left-0 w-0 h-0 overflow-visible pointer-events-none">
+                      <AttestationTemplate 
+                        exam={exam} 
+                        result={finalResult} 
+                        user={user} 
+                        moduleName={moduleName} 
+                        isPreview={false}
+                      />
+                    </div>,
+                    document.body
+                  )}
 
                 </div>
               )}

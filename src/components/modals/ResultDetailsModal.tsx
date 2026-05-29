@@ -1,17 +1,21 @@
 import React from 'react';
-import { CheckCircle2, XCircle, MinusCircle, HelpCircle, ArrowLeft, Sparkles } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { CheckCircle2, XCircle, MinusCircle, HelpCircle, ArrowLeft, Sparkles, Award, Download, Printer } from 'lucide-react';
 import { Modal } from '../ui/Modal';
-import { Exam, Result } from '../../types';
+import { Exam, Result, UserProfile, Module } from '../../types';
 import { cn, formatScore, formatPercent } from '../../lib/utils';
 import { Button } from '../ui/Button';
+import { AttestationTemplate, printAttestation, downloadAttestationPDF } from '../AttestationTemplate';
 
 interface ResultDetailsModalProps {
   exam: Exam;
   result: Result;
+  user: UserProfile;
+  modules: Module[];
   onClose: () => void;
 }
 
-export const ResultDetailsModal = ({ exam, result, onClose }: ResultDetailsModalProps) => {
+export const ResultDetailsModal = ({ exam, result, user, modules, onClose }: ResultDetailsModalProps) => {
   const isArabic = (text: string) => /[\u0600-\u06FF]/.test(text || '');
 
   return (
@@ -267,12 +271,72 @@ export const ResultDetailsModal = ({ exam, result, onClose }: ResultDetailsModal
               </div>
             );
           })}
+
+          {/* Certificate on-screen preview section */}
+          <div className="bg-amber-50/15 border-2 border-dashed border-amber-500/20 rounded-3xl p-6 space-y-4 mt-8">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-amber-700">
+                <Award className="w-5 h-5 text-amber-600 font-black" />
+                <span className="text-[10px] font-black uppercase tracking-[0.2em] font-display">
+                  Votre Attestation de Réussite / Passage
+                </span>
+              </div>
+              <span className="text-[8px] font-black uppercase text-amber-600 bg-amber-50 px-2 py-1 rounded border border-amber-200">
+                Généré en Temps Réel
+              </span>
+            </div>
+            
+            <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-inner bg-slate-150/40 p-2 md:p-4 max-h-[350px] overflow-y-auto custom-scrollbar">
+              <AttestationTemplate 
+                exam={exam} 
+                result={result} 
+                user={user} 
+                moduleName={modules.find(m => m.id === exam.moduleId)?.name} 
+                isPreview={true} 
+              />
+            </div>
+            <p className="text-[9px] text-slate-400 font-bold text-center uppercase tracking-widest leading-none">
+              Un exemplaire A4 Paysage haute définition sera envoyé à l'imprimante
+            </p>
+          </div>
         </div>
         
-        <div className="p-5 sm:p-6 border-t border-slate-100 bg-white sticky bottom-0">
-          <Button onClick={onClose} variant="outline" className="w-full">
+        {/* Print-only template rendered outside the modal in a portal to prevent any scale/transform clipping issues in html2canvas */}
+        {createPortal(
+          <div className="absolute top-0 left-0 w-0 h-0 overflow-visible pointer-events-none">
+            <AttestationTemplate 
+              exam={exam} 
+              result={result} 
+              user={user} 
+              moduleName={modules.find(m => m.id === exam.moduleId)?.name} 
+              isPreview={false}
+            />
+          </div>,
+          document.body
+        )}
+        
+        <div className="p-5 sm:p-6 border-t border-slate-100 bg-white sticky bottom-0 flex flex-col sm:flex-row gap-3">
+          <Button onClick={onClose} variant="outline" className="flex-1 py-3.5 font-bold uppercase text-xs tracking-wider">
             <ArrowLeft className="w-4 h-4 mr-2" /> Retour
           </Button>
+          <button 
+            onClick={() => {
+              downloadAttestationPDF(exam, result, user, modules.find(m => m.id === exam.moduleId)?.name);
+            }}
+            className="flex-1 py-3.5 rounded-xl border-2 border-indigo-600 bg-indigo-600 hover:bg-indigo-700 text-white font-black uppercase text-xs tracking-widest transition-all flex items-center justify-center gap-2 active:scale-98 shadow-sm cursor-pointer"
+          >
+            <Download className="w-4 h-4" />
+            <span>Télécharger PDF</span>
+          </button>
+          <button 
+            onClick={() => {
+              printAttestation("attestation-export-container");
+            }}
+            className="flex-1 py-3.5 rounded-xl border-2 border-slate-200 text-slate-700 bg-white hover:bg-slate-50 hover:border-indigo-200 hover:text-indigo-650 font-black uppercase text-xs tracking-widest transition-all flex items-center justify-center gap-2 active:scale-98 cursor-pointer"
+          >
+            <Printer className="w-4 h-4 text-slate-400" />
+            <span>Imprimer</span>
+          </button>
         </div>
       </div>
     </Modal>

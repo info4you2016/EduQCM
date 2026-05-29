@@ -10,7 +10,7 @@ import {
 } from 'recharts';
 import Papa from 'papaparse';
 import { Modal } from '../ui/Modal';
-import { Exam, Result, Module, Filiere, Group, OrganizationSettings } from '../../types';
+import { Exam, Result, Module, Filiere, Group, OrganizationSettings, UserProfile } from '../../types';
 import { api } from '../../lib/api';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
@@ -548,6 +548,16 @@ export const ExamPerformanceModal = ({ exam, onClose, modules, filieres, groups,
           <ResultDetailsModal 
             exam={exam}
             result={selectedResult}
+            user={{
+              id: selectedResult.studentId,
+              email: selectedResult.studentEmail || '',
+              displayName: selectedResult.studentName || '',
+              role: 'student',
+              groupName: selectedResult.groupName,
+              filiere: selectedResult.filiere,
+              createdAt: selectedResult.completedAt,
+            }}
+            modules={modules}
             onClose={() => setSelectedResult(null)}
           />
         )}

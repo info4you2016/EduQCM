@@ -75,22 +75,61 @@ const convertOklchContentToHsl = (content: string): string => {
   }
 };
 
-export const replaceOklchWithHsl = (cssText: string): string => {
-  if (!cssText) return '';
+const convertOklabContentToHsl = (content: string): string => {
+  try {
+    const cleanContent = content.trim().replace(/,/g, ' ');
+    const slashParts = cleanContent.split('/');
+    const labParts = slashParts[0].trim().split(/\s+/);
+    
+    if (labParts.length < 3) {
+      return 'hsl(210, 10%, 65%)';
+    }
+    
+    const lStr = labParts[0];
+    const aStr = labParts[1];
+    const bStr = labParts[2];
+    
+    if (lStr.includes('var(') || aStr.includes('var(') || bStr.includes('var(')) {
+      return 'hsl(210, 15%, 50%)';
+    }
+    
+    const lVal = parseFloat(lStr);
+    const aVal = parseFloat(aStr);
+    const bVal = parseFloat(bStr);
+    
+    if (isNaN(lVal) || isNaN(aVal) || isNaN(bVal)) {
+      return 'hsl(210, 10%, 65%)';
+    }
+    
+    // convert Oklab to Oklch using standard color conversions
+    const cVal = Math.sqrt(aVal * aVal + bVal * bVal);
+    let hDeg = Math.atan2(bVal, aVal) * (180 / Math.PI);
+    if (hDeg < 0) hDeg += 360;
+    
+    const alphaPart = slashParts[1] ? ` / ${slashParts[1].trim()}` : '';
+    const oklchContent = `${lStr} ${cVal} ${hDeg}${alphaPart}`;
+    return convertOklchContentToHsl(oklchContent);
+  } catch (err) {
+    console.error('Error converting OKLAB to HSL:', err);
+    return 'hsl(210, 10%, 65%)';
+  }
+};
+
+const replaceColorFunc = (cssText: string, funcName: string, convertFn: (content: string) => string): string => {
   let result = '';
   let index = 0;
   
   while (true) {
-    const oklchStart = cssText.indexOf('oklch(', index);
-    if (oklchStart === -1) {
+    const startIdx = cssText.indexOf(funcName, index);
+    if (startIdx === -1) {
       result += cssText.substring(index);
       break;
     }
     
-    result += cssText.substring(index, oklchStart);
+    result += cssText.substring(index, startIdx);
     
     let parenCount = 1;
-    let i = oklchStart + 6;
+    let i = startIdx + funcName.length;
     for (; i < cssText.length; i++) {
       if (cssText[i] === '(') parenCount++;
       else if (cssText[i] === ')') parenCount--;
@@ -101,22 +140,34 @@ export const replaceOklchWithHsl = (cssText: string): string => {
     }
     
     if (i >= cssText.length) {
-      result += cssText.substring(oklchStart);
+      result += cssText.substring(startIdx);
       break;
     }
     
-    const oklchContent = cssText.substring(oklchStart + 6, i);
+    const content = cssText.substring(startIdx + funcName.length, i);
     index = i + 1;
     
-    result += convertOklchContentToHsl(oklchContent);
+    result += convertFn(content);
   }
+  
+  return result;
+};
+
+export const replaceOklchWithHsl = (cssText: string): string => {
+  if (!cssText) return '';
+  
+  // First, convert oklch
+  let result = replaceColorFunc(cssText, 'oklch(', convertOklchContentToHsl);
+  // Then, convert oklab
+  result = replaceColorFunc(result, 'oklab(', convertOklabContentToHsl);
   
   return result;
 };
 
 interface StylesheetBackup {
   element: HTMLStyleElement | HTMLLinkElement;
-  wasDisabled: boolean;
+  parent: Node | null;
+  nextSibling: Node | null;
 }
 
 const sanitizeOklchColorsForHtml2Canvas = async (): Promise<() => void> => {
@@ -126,28 +177,47 @@ const sanitizeOklchColorsForHtml2Canvas = async (): Promise<() => void> => {
   const styleElements = Array.from(document.querySelectorAll('style, link[rel="stylesheet"]'));
 
   for (const el of styleElements) {
+    if (el.id === 'html2canvas-sanitized-styles') continue;
+
+    let cssText = '';
     if (el instanceof HTMLStyleElement) {
-      backups.push({ element: el, wasDisabled: el.disabled });
-      const sanitized = replaceOklchWithHsl(el.textContent || '');
-      sanitizedCssTexts.push(sanitized);
-      el.disabled = true;
+      cssText = el.textContent || '';
+      if (!cssText) {
+        try {
+          if (el.sheet) {
+            cssText = Array.from(el.sheet.cssRules).map(r => r.cssText).join('\n');
+          }
+        } catch (e) {
+          // ignore
+        }
+      }
     } else if (el instanceof HTMLLinkElement) {
-      backups.push({ element: el, wasDisabled: el.disabled });
-      el.disabled = true;
       try {
         const href = el.href;
         if (href) {
           const res = await fetch(href);
           if (res.ok) {
-            const cssText = await res.text();
-            const sanitized = replaceOklchWithHsl(cssText);
-            sanitizedCssTexts.push(sanitized);
+            cssText = await res.text();
           }
         }
       } catch (err) {
         console.warn('Failed to sanitize external link stylesheet for html2canvas:', el, err);
       }
     }
+
+    if (cssText) {
+      const sanitized = replaceOklchWithHsl(cssText);
+      sanitizedCssTexts.push(sanitized);
+    }
+
+    // Save placement and detach from DOM so html2canvas doesn't find it
+    backups.push({
+      element: el as HTMLStyleElement | HTMLLinkElement,
+      parent: el.parentNode,
+      nextSibling: el.nextSibling
+    });
+    
+    el.parentNode?.removeChild(el);
   }
 
   // Inject normalized styles
@@ -160,9 +230,17 @@ const sanitizeOklchColorsForHtml2Canvas = async (): Promise<() => void> => {
     const el = document.getElementById('html2canvas-sanitized-styles');
     if (el) el.remove();
 
-    backups.forEach(backup => {
-      backup.element.disabled = backup.wasDisabled;
-    });
+    // Restore original style elements in exact reverse order
+    for (let i = backups.length - 1; i >= 0; i--) {
+      const { element, parent, nextSibling } = backups[i];
+      if (parent) {
+        if (nextSibling) {
+          parent.insertBefore(element, nextSibling);
+        } else {
+          parent.appendChild(element);
+        }
+      }
+    }
   };
 };
 
@@ -178,6 +256,55 @@ const hexToRgb = (hex: string): { r: number; g: number; b: number } => {
   const g = parseInt(cleanHex.substring(2, 4), 16) || 224;
   const b = parseInt(cleanHex.substring(4, 6), 16) || 224;
   return { r, g, b };
+};
+
+const patchWindowGetComputedStyle = (win: any): (() => void) => {
+  if (!win) return () => {};
+  const originalGCS = win.getComputedStyle;
+  try {
+    win.getComputedStyle = function (elt: any, pseudoElt: any) {
+      const style = originalGCS.call(win, elt, pseudoElt);
+      if (!style) return style;
+      return new Proxy(style, {
+        get(target, prop, receiver) {
+          if (typeof prop === 'string') {
+            if (prop === 'getPropertyValue') {
+              return function (p: string) {
+                const val = target.getPropertyValue(p);
+                if (typeof val === 'string' && (val.toLowerCase().includes('oklch') || val.toLowerCase().includes('oklab'))) {
+                  try {
+                    return replaceOklchWithHsl(val);
+                  } catch (e) {
+                    return val;
+                  }
+                }
+                return val;
+              };
+            }
+            const val = (target as any)[prop];
+            if (typeof val === 'string' && (val.toLowerCase().includes('oklch') || val.toLowerCase().includes('oklab'))) {
+              try {
+                return replaceOklchWithHsl(val);
+              } catch (e) {
+                return val;
+              }
+            }
+          }
+          const val = Reflect.get(target, prop, receiver);
+          if (typeof val === 'function') {
+            return val.bind(target);
+          }
+          return val;
+        }
+      });
+    };
+    return () => {
+      win.getComputedStyle = originalGCS;
+    };
+  } catch (e) {
+    console.warn('Failed to patch getComputedStyle:', e);
+    return () => {};
+  }
 };
 
 export const exportHtmlElementToPdf = async (
@@ -207,8 +334,12 @@ export const exportHtmlElementToPdf = async (
   
   let restoreStylesheets: (() => void) | null = null;
   let restorePagination: (() => void) | null = null;
+  let restoreMainGCS: (() => void) | null = null;
   
   try {
+    // Intercept computed styles to substitute oklch/oklab with HSL compatibility values
+    restoreMainGCS = patchWindowGetComputedStyle(window);
+
     // Dynamic page-break pagination algorithm
     const elementWidthPx = element.clientWidth || parseInt(window.getComputedStyle(element).width || '794');
     const pageHeightPx = elementWidthPx * (a4HeightMm / a4WidthMm);
@@ -295,17 +426,32 @@ export const exportHtmlElementToPdf = async (
       windowWidth: element.clientWidth,
       windowHeight: element.clientHeight,
       onclone: (clonedDoc) => {
-        // Also sanitize oklch inside inline style attributes of elements
+        // Intercept computed styles in the cloned window context (iframe)
+        const clonedWindow = clonedDoc.defaultView;
+        if (clonedWindow) {
+          patchWindowGetComputedStyle(clonedWindow);
+        }
+
+        // Also sanitize oklch and oklab inside inline style attributes of elements
         const elementsWithStyle = clonedDoc.querySelectorAll('[style]');
         elementsWithStyle.forEach(el => {
           const styleAttr = el.getAttribute('style');
-          if (styleAttr && styleAttr.toLowerCase().includes('oklch')) {
-            el.setAttribute('style', replaceOklchWithHsl(styleAttr));
+          if (styleAttr) {
+            const lowerAttr = styleAttr.toLowerCase();
+            if (lowerAttr.includes('oklch') || lowerAttr.includes('oklab')) {
+              el.setAttribute('style', replaceOklchWithHsl(styleAttr));
+            }
           }
         });
       }
     });
     
+    // Done capturing, restore main window getComputedStyle immediately
+    if (restoreMainGCS) {
+      restoreMainGCS();
+      restoreMainGCS = null;
+    }
+
     // Restore original CSS styles
     element.setAttribute('style', originalStyle);
     
@@ -387,6 +533,9 @@ export const exportHtmlElementToPdf = async (
     doc.save(filename);
   } catch (err) {
     console.error('Error in exportHtmlElementToPdf:', err);
+    if (restoreMainGCS) {
+      try { restoreMainGCS(); } catch (e) {}
+    }
     element.setAttribute('style', originalStyle);
     if (restorePagination) {
       restorePagination();

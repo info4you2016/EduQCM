@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { motion } from 'motion/react';
 import { 
   Sparkles, BookOpen, CheckCircle2, BarChart3, Clock, Search, Star, ClipboardList, ArrowRight, Target, TrendingUp,
-  Award, Trophy, ShieldAlert, Zap, Flame, Lock, Bell
+  Award, Trophy, ShieldAlert, Zap, Flame, Lock, Bell, Grid, List as ListIcon, RotateCcw, SlidersHorizontal, BookOpenCheck, GraduationCap
 } from 'lucide-react';
 import { cn, getExamTotalPoints, formatDuration } from '../../lib/utils';
 import { Exam, Result, Module, UserProfile, Notification, Group, Filiere } from '../../types';
@@ -31,8 +31,45 @@ export const StudentDashboard = ({ exams, results, onStartExam, user, modules, n
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedModuleId, setSelectedModuleId] = useState<number | null>(null);
   const [statusFilter, setStatusFilter] = useState<'all' | 'todo' | 'completed'>('all');
+  const [typeFilter, setTypeFilter] = useState<'all' | 'controle-continu' | 'fin-de-module'>('all');
   const [sortBy, setSortBy] = useState<'createdAt' | 'title'>('createdAt');
+  const [layoutMode, setLayoutMode] = useState<'grid' | 'list'>('grid');
   const [selectedResult, setSelectedResult] = useState<{ exam: Exam, result: Result } | null>(null);
+
+  // Computed status counts for the selected module and search query context
+  const statusCounts = useMemo(() => {
+    let all = 0;
+    let todo = 0;
+    let completed = 0;
+
+    exams.forEach(e => {
+      const matchesSearch = e.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
+        (modules.find(m => m.id === e.moduleId)?.name || '').toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesModule = selectedModuleId === null || e.moduleId === selectedModuleId;
+      const matchesType = typeFilter === 'all' || e.type === typeFilter;
+
+      if (matchesSearch && matchesModule && matchesType) {
+        all++;
+        const hasTaken = results.some(r => r.examId === e.id);
+        if (hasTaken) {
+          completed++;
+        } else {
+          todo++;
+        }
+      }
+    });
+
+    return { all, todo, completed };
+  }, [exams, results, searchQuery, selectedModuleId, typeFilter, modules]);
+
+  // Handle global filters reset
+  const handleResetFilters = () => {
+    setSearchQuery('');
+    setSelectedModuleId(null);
+    setStatusFilter('all');
+    setTypeFilter('all');
+    setSortBy('createdAt');
+  };
 
   const examsWithStatus = useMemo(() => {
     return exams
@@ -44,7 +81,8 @@ export const StudentDashboard = ({ exams, results, onStartExam, user, modules, n
         const matchesStatus = statusFilter === 'all' || 
           (statusFilter === 'todo' && !hasTaken) || 
           (statusFilter === 'completed' && hasTaken);
-        return matchesSearch && matchesModule && matchesStatus;
+        const matchesType = typeFilter === 'all' || e.type === typeFilter;
+        return matchesSearch && matchesModule && matchesStatus && matchesType;
       })
       .map(exam => ({
         ...exam,
@@ -57,7 +95,7 @@ export const StudentDashboard = ({ exams, results, onStartExam, user, modules, n
         }
         return a.title.localeCompare(b.title);
       });
-  }, [exams, results, searchQuery, modules, sortBy, selectedModuleId, statusFilter]);
+  }, [exams, results, searchQuery, modules, sortBy, selectedModuleId, statusFilter, typeFilter]);
 
   const stats = useMemo(() => {
     const totalTaken = results.length;
@@ -155,6 +193,62 @@ export const StudentDashboard = ({ exams, results, onStartExam, user, modules, n
     ];
   }, [results]);
 
+  // Track module-by-module metrics for granular progression monitoring
+  const moduleDetailedStats = useMemo(() => {
+    return modules.map(m => {
+      const moduleExams = exams.filter(e => e.moduleId === m.id);
+      const totalExams = moduleExams.length;
+      
+      const moduleResults = results.filter(r => {
+        const exam = exams.find(e => e.id === r.examId);
+        return exam?.moduleId === m.id;
+      });
+      const completedCount = moduleResults.length;
+      
+      const avg = completedCount > 0 
+        ? Math.round(moduleResults.reduce((acc, r) => acc + (r.score / (r.totalPoints || 1)) * 100, 0) / completedCount)
+        : -1;
+
+      return {
+        id: m.id,
+        name: m.name,
+        code: m.code,
+        totalExams,
+        completedCount,
+        avg
+      };
+    });
+  }, [modules, exams, results]);
+
+  // Find the single most urgent pending exam for the prominent top objective banner
+  const mostUrgentExam = useMemo(() => {
+    const pending = exams
+      .filter(e => !results.some(r => r.examId === e.id))
+      .map(e => ({
+        ...e,
+        totalPoints: getExamTotalPoints(e)
+      }));
+    if (pending.length === 0) return null;
+
+    // EFM (fin de module) takes absolute priority over controls continus, then recency
+    return pending.sort((a, b) => {
+      const priorityA = a.type === 'fin-de-module' ? 2 : 1;
+      const priorityB = b.type === 'fin-de-module' ? 2 : 1;
+      if (priorityA !== priorityB) {
+        return priorityB - priorityA;
+      }
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    })[0];
+  }, [exams, results]);
+
+  // Smooth-scroll focus helper that updates status filter
+  const handleStatCardClick = (targetStatus: 'all' | 'todo' | 'completed') => {
+    setStatusFilter(targetStatus);
+    setTimeout(() => {
+      document.getElementById('examens-disponibles')?.scrollIntoView({ behavior: 'smooth' });
+    }, 100);
+  };
+
   return (
     <div className="space-y-12">
       {/* Welcome Header */}
@@ -221,20 +315,137 @@ export const StudentDashboard = ({ exams, results, onStartExam, user, modules, n
         </motion.div>
       </motion.div>
 
+      {/* Target Active Objective Hero Card (Épreuve Prioritaire) */}
+      <motion.div
+        initial={{ opacity: 0, y: 15 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.2, duration: 0.4 }}
+      >
+        {mostUrgentExam ? (
+          <div className="relative bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 border-2 border-indigo-500/30 rounded-[2.5rem] p-6 md:p-8 text-white overflow-hidden shadow-xl shadow-indigo-950/20">
+            {/* Ambient gradients */}
+            <div className="absolute top-0 right-0 w-80 h-80 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
+            <div className="absolute -bottom-10 -left-10 w-60 h-60 bg-violet-500/15 rounded-full blur-2xl pointer-events-none" />
+            
+            <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+              <div className="space-y-4 max-w-2xl">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="flex h-2.5 w-2.5 rounded-full bg-rose-500 relative">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-500" />
+                  </span>
+                  <span className="text-[10px] font-black uppercase tracking-[0.25em] text-indigo-300">
+                    Objectif principal : Épreuve prioritaire à relever
+                  </span>
+                  {mostUrgentExam.type === 'fin-de-module' && (
+                    <span className="text-[8px] font-black bg-rose-600 text-white px-2 py-0.5 rounded-md uppercase tracking-wider animate-pulse">
+                      Examen Fin de Module (EFM)
+                    </span>
+                  )}
+                </div>
+                <div className="space-y-1">
+                  <p className="text-xs text-indigo-300/90 font-black uppercase tracking-wider">
+                    {modules.find(m => m.id === mostUrgentExam.moduleId)?.name || 'Module Académique'}
+                  </p>
+                  <h3 className="text-2xl md:text-3xl font-black text-white tracking-tight leading-none mb-1">
+                    {mostUrgentExam.title}
+                  </h3>
+                  <p className="text-slate-300 text-xs font-semibold max-w-xl leading-relaxed">
+                    {mostUrgentExam.description || "Cette évaluation est requise pour valider vos compétences dans ce module d'enseignement. Installez-vous confortablement avant de lancer."}
+                  </p>
+                </div>
+
+                {/* Info parameters cards layout */}
+                <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs font-black text-slate-300 pt-1">
+                  <div className="flex items-center gap-1.5 bg-slate-800/40 px-3 py-1.5 rounded-xl border border-slate-700/30">
+                    <Clock className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Durée : <strong className="text-white font-black">{formatDuration(mostUrgentExam.durationMinutes)}</strong></span>
+                  </div>
+                  <div className="flex items-center gap-1.5 bg-slate-800/40 px-3 py-1.5 rounded-xl border border-slate-700/30">
+                    <ClipboardList className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Structure : <strong className="text-white font-black">{mostUrgentExam.questions.length} questions</strong></span>
+                  </div>
+                  <div className="flex items-center gap-1.5 bg-slate-800/40 px-3 py-1.5 rounded-xl border border-slate-700/30">
+                    <Star className="w-3.5 h-3.5 text-amber-500 fill-amber-400" />
+                    <span>Récompense : <strong className="text-amber-400 font-black">{mostUrgentExam.totalPoints} points</strong></span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Call-to-action wrapper */}
+              <div className="shrink-0 w-full lg:w-auto flex flex-col sm:flex-row items-center gap-4 border-t border-slate-800 lg:border-t-0 pt-4 lg:pt-0">
+                <div className="text-center sm:text-right hidden xl:block">
+                  <p className="text-[10px] font-black text-indigo-300 uppercase tracking-widest leading-none">Concentration de rigueur</p>
+                  <p className="text-[10px] text-slate-400 font-bold mt-1.5">Chronomètre opérationnel dès le clic.</p>
+                </div>
+                <Button
+                  onClick={() => onStartExam(mostUrgentExam)}
+                  size="lg"
+                  className="w-full lg:w-auto h-16 px-8 rounded-2xl bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white font-black text-xs uppercase tracking-[0.2em] shadow-lg shadow-indigo-600/30 border border-indigo-400/30 hover:scale-[1.03] transition-all flex items-center justify-center gap-2 group cursor-pointer"
+                >
+                  Démarrer l'épreuve maintenant 
+                  <ArrowRight className="w-4 h-4 group-hover:translate-x-1.5 transition-transform" />
+                </Button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="relative bg-gradient-to-br from-emerald-50/80 to-teal-50/50 border-2 border-emerald-100 rounded-[2.5rem] p-6 md:p-8 text-center space-y-4 shadow-soft">
+            <div className="w-12 h-12 rounded-2xl bg-emerald-500 text-white mx-auto flex items-center justify-center shadow-md shadow-emerald-100">
+              <CheckCircle2 className="w-6 h-6 animate-pulse" />
+            </div>
+            <div className="space-y-1.5">
+              <h3 className="text-xl font-black text-slate-900 tracking-tight">🏆 Toutes vos épreuves sont validées !</h3>
+              <p className="text-xs text-slate-500 max-w-lg mx-auto font-bold leading-relaxed">
+                Félicitations ! Vous avez complété toutes les évaluations disponibles pour vos cours d'enseignement. Vous n'avez aucun examen en attente de passage. Profitez-en pour réviser ou analyser vos communications officielles.
+              </p>
+            </div>
+          </div>
+        )}
+      </motion.div>
+
       {/* Stats Summary */}
       <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-8">
         {[
-          { label: 'Examen Passés', value: stats.totalTaken, icon: CheckCircle2, bg: 'bg-emerald-50', color: 'text-emerald-600', border: 'border-emerald-100' },
-          { label: 'Score Moyen', value: `${stats.averageScore}%`, icon: BarChart3, bg: 'bg-indigo-50', color: 'text-indigo-600', border: 'border-indigo-100' },
-          { label: 'À Compléter', value: stats.pendingExams, icon: Clock, bg: 'bg-amber-50', color: 'text-amber-600', border: 'border-amber-100' },
+          { 
+            label: 'Examen Passés', 
+            value: stats.totalTaken, 
+            icon: CheckCircle2, 
+            bg: 'bg-emerald-50', 
+            color: 'text-emerald-300', 
+            border: 'border-emerald-100/30',
+            interactive: true,
+            onClick: () => handleStatCardClick('completed'),
+            colorText: 'text-emerald-700 bg-emerald-50 border-emerald-100'
+          },
+          { 
+            label: 'Score Moyen', 
+            value: `${stats.averageScore}%`, 
+            icon: BarChart3, 
+            bg: 'bg-indigo-50', 
+            color: 'text-indigo-600', 
+            border: 'border-indigo-100/40',
+            sub: 'Moyenne générale académique'
+          },
+          { 
+            label: 'À Compléter', 
+            value: stats.pendingExams, 
+            icon: Clock, 
+            bg: 'bg-amber-50', 
+            color: 'text-amber-500', 
+            border: 'border-amber-100/30',
+            interactive: true,
+            onClick: () => handleStatCardClick('all'),
+            colorText: 'text-amber-700 bg-amber-50 border-amber-100'
+          },
           { 
             label: 'Force Majeure', 
             value: stats.bestModule ? stats.bestModule.name : 'N/A', 
             icon: Star, 
             bg: 'bg-violet-50', 
             color: 'text-violet-600', 
-            border: 'border-violet-100',
-            sub: stats.bestModule ? `${stats.bestModule.avg}% de moyenne` : 'Continuez à pratiquer'
+            border: 'border-violet-100/40',
+            sub: stats.bestModule ? `${stats.bestModule.avg}% de moyenne` : 'Analyse en cours...'
           },
         ].map((stat, i) => (
           <motion.div 
@@ -242,185 +453,309 @@ export const StudentDashboard = ({ exams, results, onStartExam, user, modules, n
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.1 }}
-            className="bg-white p-6 rounded-[2.5rem] border-2 border-slate-50 flex flex-col justify-between shadow-soft group hover:border-indigo-100 transition-all duration-500 cursor-default"
+            onClick={stat.onClick}
+            className={cn(
+              "bg-white p-6 rounded-[2.5rem] border-2 border-slate-50 flex flex-col justify-between shadow-soft group transition-all duration-300",
+              'interactive' in stat 
+                ? "cursor-pointer hover:border-indigo-300/80 hover:scale-[1.03] active:scale-[0.98] hover:shadow-lg hover:shadow-indigo-100/50" 
+                : "hover:border-indigo-100/60 cursor-default"
+            )}
           >
             <div className="flex justify-between items-start mb-4">
-              <div className={cn("w-12 h-12 rounded-2xl flex items-center justify-center transition-all duration-500 group-hover:scale-110 group-hover:rotate-6 shadow-sm border", stat.bg, stat.color, stat.border)}>
-                <stat.icon className="w-6 h-6" />
+              <div className={cn("w-12 h-12 rounded-2xl flex items-center justify-center transition-all duration-300 group-hover:scale-110 group-hover:rotate-6 shadow-sm border", stat.bg, stat.color, stat.border)}>
+                <stat.icon className="w-6 h-6 text-slate-800" />
               </div>
               <div className="text-right">
-                <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">{stat.label}</p>
+                <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1 flex items-center justify-end gap-1">
+                  {stat.label}
+                  {'interactive' in stat && <ArrowRight className="w-2.5 h-2.5 text-indigo-400 group-hover:translate-x-0.5 transition-transform" />}
+                </p>
                 <h4 className="text-2xl font-black text-slate-900 tracking-tighter truncate max-w-[140px]">{stat.value}</h4>
               </div>
             </div>
-            {'sub' in stat && (
+            {'sub' in stat ? (
               <p className="text-[10px] font-bold text-slate-400 mt-2 border-t border-slate-50 pt-2">{stat.sub}</p>
-            )}
+            ) : 'interactive' in stat ? (
+              <p className="text-[10px] font-black text-indigo-600/80 mt-2 border-t border-slate-50 pt-2 flex items-center gap-1 group-hover:text-indigo-600 transition-colors">
+                Examiner les épreuves ↓
+              </p>
+            ) : null}
           </motion.div>
         ))}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
         <div className="lg:col-span-8 space-y-12">
-          {results.length > 0 && (
-            <section className="space-y-6">
-              <div className="flex items-center justify-between">
-                <h3 className="text-xl font-black text-slate-900 tracking-tight">Dernières Performances</h3>
-                <div className="w-10 h-10 rounded-xl bg-slate-50 flex items-center justify-center">
-                   <Target className="w-5 h-5 text-slate-300" />
-                </div>
-              </div>
-              <div className="flex gap-4 overflow-x-auto pb-4 no-scrollbar">
-                {[...results].sort((a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime()).slice(0, 4).map(result => {
-                  const exam = exams.find(e => e.id === result.examId);
-                  if (!exam) return null;
-                  const percentage = Math.round((result.score / (result.totalPoints || 1)) * 100);
-                  return (
-                    <Card key={result.id} className="min-w-[280px] p-6 border-2 border-slate-50 hover:border-indigo-100 transition-all cursor-pointer" onClick={() => setSelectedResult({ exam, result })}>
-                      <div className="space-y-4">
-                        <div className="flex justify-between items-start">
-                          <span className="text-[9px] font-black uppercase tracking-widest text-indigo-600 bg-indigo-50 px-2 py-1 rounded">
-                            {modules.find(m => m.id === exam.moduleId)?.name}
-                          </span>
-                          <span className="text-[10px] font-bold text-slate-400">{new Date(result.completedAt).toLocaleDateString()}</span>
-                        </div>
-                        <h4 className="font-black text-slate-900 line-clamp-1">{exam.title}</h4>
-                        <div className="flex items-end justify-between">
-                           <div className="space-y-1">
-                             <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Score</p>
-                             <p className="text-2xl font-black text-slate-900 tracking-tighter">{Number.isInteger(result.score) ? result.score : result.score.toFixed(2)}<span className="text-sm text-slate-300">/{result.totalPoints}</span></p>
-                           </div>
-                           <div className={cn(
-                             "px-3 py-1.5 rounded-xl text-xs font-black",
-                             percentage >= 80 ? "bg-emerald-50 text-emerald-600" : percentage >= 50 ? "bg-amber-50 text-amber-600" : "bg-rose-50 text-rose-600"
-                           )}>
-                             {percentage}%
-                           </div>
-                        </div>
-                      </div>
-                    </Card>
-                  );
-                })}
-              </div>
-            </section>
-          )}
 
-          {/* Class Announcements & Communications segment */}
-          <section className="space-y-6">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <div className="w-10 h-10 rounded-xl bg-indigo-50 flex items-center justify-center shrink-0">
-                  <Bell className="w-5 h-5 text-indigo-600" />
-                </div>
-                <h3 className="text-xl font-black text-slate-900 tracking-tight">Annonces de classe & Communiqués</h3>
+          <section className="space-y-8" id="examens-disponibles">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 pb-4 border-b border-slate-100">
+              <div className="space-y-1">
+                <h3 className="text-xl font-black text-slate-900 tracking-tight">Examens Disponibles</h3>
+                <p className="text-xs text-slate-400 font-bold">
+                  {examsWithStatus.length} {examsWithStatus.length > 1 ? 'épreuves trouvées' : 'épreuve trouvée'}
+                </p>
               </div>
-              <span className="text-[10px] font-black uppercase text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-xl">
-                {notifications.length} {notifications.length > 1 ? 'annonces' : 'annonce'}
-              </span>
-            </div>
-            {notifications.length === 0 ? (
-              <div className="p-8 text-center bg-slate-50/60 rounded-[2rem] border-2 border-dashed border-slate-100">
-                <p className="text-xs font-black text-slate-400 uppercase tracking-widest leading-none">Aucun communiqué officiel</p>
-                <p className="text-[10px] text-slate-400 mt-2">Votre enseignant n'a publié aucune annonce pour l'instant.</p>
-              </div>
-            ) : (
-              <div className="space-y-6">
-                {notifications.map((notif) => (
-                  <DetailedNotificationCard 
-                    key={notif.id} 
-                    notification={notif} 
-                    user={user} 
-                    groups={groups}
-                    filieres={filieres}
-                    onRefresh={onRefresh} 
-                  />
-                ))}
-              </div>
-            )}
-          </section>
-
-          <section className="space-y-8">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-              <h3 className="text-xl font-black text-slate-900 tracking-tight">Examens Disponibles</h3>
               
-              <div className="flex flex-wrap items-center gap-3">
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-300" />
-                  <input 
-                    type="text" 
-                    placeholder="Filtrer..." 
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-40 pl-9 pr-4 py-2 bg-slate-50 border-2 border-transparent focus:border-indigo-500/20 focus:bg-white rounded-xl text-[10px] font-black uppercase tracking-widest transition-all outline-none"
-                  />
-                </div>
-                <select 
-                  value={sortBy}
-                  onChange={(e) => setSortBy(e.target.value as 'createdAt' | 'title')}
-                  className="px-3 py-2 bg-slate-50 border-2 border-transparent focus:border-indigo-500/20 focus:bg-white rounded-xl text-[10px] font-black uppercase tracking-widest transition-all outline-none text-slate-600"
-                >
-                  <option value="createdAt">Récent</option>
-                  <option value="title">Titre</option>
-                </select>
-              </div>
-            </div>
-
-            {/* Module Filter Pills */}
-            <div className="flex items-center gap-2 overflow-x-auto pb-2 no-scrollbar">
-              <button
-                onClick={() => setSelectedModuleId(null)}
-                className={cn(
-                  "px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest whitespace-nowrap transition-all border-2",
-                  selectedModuleId === null 
-                    ? "bg-slate-900 text-white border-slate-900 shadow-lg shadow-slate-200" 
-                    : "bg-white text-slate-500 border-slate-100 hover:border-slate-200"
-                )}
-              >
-                Tous les modules
-              </button>
-              {modules.map(module => (
+              {/* Layout Mode Toggle Grid vs List */}
+              <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-2xl border border-slate-200/50 w-fit">
                 <button
-                  key={module.id}
-                  onClick={() => setSelectedModuleId(module.id)}
+                  type="button"
+                  onClick={() => setLayoutMode('grid')}
+                  title="Affichage en Grille"
                   className={cn(
-                    "px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest whitespace-nowrap transition-all border-2",
-                    selectedModuleId === module.id 
-                      ? "bg-indigo-600 text-white border-indigo-600 shadow-lg shadow-indigo-100" 
-                      : "bg-white text-slate-500 border-slate-100 hover:border-slate-200"
+                    "p-2 rounded-xl transition-all",
+                    layoutMode === 'grid' 
+                      ? "bg-white text-indigo-600 shadow-sm border border-slate-200/40" 
+                      : "text-slate-400 hover:text-slate-600"
                   )}
                 >
-                  {module.name}
+                  <Grid className="w-4 h-4" />
                 </button>
-              ))}
+                <button
+                  type="button"
+                  onClick={() => setLayoutMode('list')}
+                  title="Affichage en Liste"
+                  className={cn(
+                    "p-2 rounded-xl transition-all",
+                    layoutMode === 'list' 
+                      ? "bg-white text-indigo-600 shadow-sm border border-slate-200/40" 
+                      : "text-slate-400 hover:text-slate-600"
+                  )}
+                >
+                  <ListIcon className="w-4 h-4" />
+                </button>
+              </div>
             </div>
 
-            {/* Status Filter Tabs (All / To Do / Completed) */}
+            {/* Comprehensive Search & Filtration Bar */}
+            <div className="bg-slate-50/50 p-5 rounded-3xl border-2 border-slate-100/70 space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-3.5">
+                {/* Search Term */}
+                <div className="relative md:col-span-4">
+                  <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4.5 h-4.5 text-slate-400" />
+                  <input 
+                    type="text" 
+                    placeholder="Rechercher par titre ou module..." 
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full pl-11 pr-4 py-2.5 bg-white border border-slate-200 focus:border-indigo-600 focus:ring-1 focus:ring-indigo-600/10 rounded-xl text-xs font-bold transition-all outline-none text-slate-800 placeholder-slate-400"
+                  />
+                </div>
+
+                {/* Sorting Select */}
+                <div className="md:col-span-4">
+                  <select 
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value as 'createdAt' | 'title')}
+                    className="w-full px-3 py-2.5 bg-white border border-slate-200 focus:border-indigo-600 rounded-xl text-xs font-bold text-slate-600 outline-none transition-all cursor-pointer"
+                  >
+                    <option value="createdAt">📅 Récents d'abord</option>
+                    <option value="title">🔤 Nom d'examen</option>
+                  </select>
+                </div>
+
+                {/* Exam Typology Filter (CC vs EFM) */}
+                <div className="md:col-span-4">
+                  <select 
+                    value={typeFilter}
+                    onChange={(e) => setTypeFilter(e.target.value as 'all' | 'controle-continu' | 'fin-de-module')}
+                    className="w-full px-3 py-2.5 bg-white border border-slate-200 focus:border-indigo-600 rounded-xl text-xs font-bold text-slate-600 outline-none transition-all cursor-pointer"
+                  >
+                    <option value="all">📝 Tous types (CC & EFM)</option>
+                    <option value="controle-continu">✏️ Contrôles Continus (CC)</option>
+                    <option value="fin-de-module">🎓 Examens Fin de Module (EFM)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Course Module Slide Pills */}
+              <div className="space-y-2 pt-2 border-t border-slate-100/80">
+                <div className="flex items-center justify-between">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">Filtrer par Module d'enseignement</p>
+                  {(searchQuery || selectedModuleId !== null || statusFilter !== 'all' || typeFilter !== 'all') && (
+                    <button
+                      onClick={handleResetFilters}
+                      className="text-[9px] font-black text-rose-600 hover:text-rose-700 uppercase tracking-wide flex items-center gap-1 bg-rose-50 hover:bg-rose-100/60 px-2.5 py-1 rounded-lg transition-colors"
+                    >
+                      <RotateCcw className="w-3 h-3" /> Réinitialiser les filtres
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 overflow-x-auto pb-2 no-scrollbar">
+                  <button
+                    onClick={() => setSelectedModuleId(null)}
+                    className={cn(
+                      "px-3.5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest whitespace-nowrap transition-all border",
+                      selectedModuleId === null 
+                        ? "bg-slate-900 text-white border-slate-900 shadow-md shadow-slate-200" 
+                        : "bg-white text-slate-500 border-slate-150 hover:border-slate-300 hover:text-slate-700"
+                    )}
+                  >
+                    Tous les modules ({exams.length})
+                  </button>
+                  {modules.map(module => {
+                    const countInModule = exams.filter(e => e.moduleId === module.id).length;
+                    return (
+                      <button
+                        key={module.id}
+                        onClick={() => setSelectedModuleId(module.id)}
+                        className={cn(
+                          "px-3.5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest whitespace-nowrap transition-all border",
+                          selectedModuleId === module.id 
+                            ? "bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-100" 
+                            : "bg-white text-slate-500 border-slate-150 hover:border-slate-300 hover:text-slate-700"
+                        )}
+                      >
+                        {module.name} ({countInModule})
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Status Filter Tabs (with active dynamic stats) */}
             <div className="flex bg-slate-100/80 p-1 rounded-2xl max-w-sm border border-slate-200/30">
               {[
-                { id: 'all', label: 'Tous' },
-                { id: 'todo', label: 'À faire' },
-                { id: 'completed', label: 'Complétés' }
+                { id: 'all', label: 'Tous', count: statusCounts.all },
+                { id: 'todo', label: 'À faire', count: statusCounts.todo },
+                { id: 'completed', label: 'Complétés', count: statusCounts.completed }
               ].map(tab => (
                 <button
                   key={tab.id}
                   onClick={() => setStatusFilter(tab.id as 'all' | 'todo' | 'completed')}
                   className={cn(
-                    "flex-1 py-1 px-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
+                    "flex-1 flex items-center justify-center gap-2 py-1.5 px-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
                     statusFilter === tab.id 
                       ? "bg-white text-slate-800 shadow-sm border border-slate-200/40 font-bold" 
                       : "text-slate-500 hover:text-slate-800"
                   )}
                 >
-                  {tab.label}
+                  <span>{tab.label}</span>
+                  <span className={cn(
+                    "px-2 py-0.5 rounded-md text-[9px] font-bold",
+                    statusFilter === tab.id 
+                      ? "bg-indigo-50 text-indigo-600" 
+                      : "bg-slate-200/60 text-slate-500"
+                  )}>
+                    {tab.count}
+                  </span>
                 </button>
               ))}
             </div>
             
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-              {examsWithStatus.length === 0 ? (
-                <div className="col-span-full"><EmptyState message={searchQuery ? "Aucun examen trouvé." : "Aucun examen disponible."} /></div>
-              ) : (
-                examsWithStatus.map((exam, index) => {
+            {examsWithStatus.length === 0 ? (
+              <div className="flex flex-col items-center justify-center p-12 text-center bg-slate-50/50 rounded-[2.5rem] border-2 border-dashed border-slate-200/50">
+                <EmptyState message={searchQuery ? "Aucune épreuve ne correspond à vos critères de recherche." : "Aucune épreuve disponible pour le moment."} />
+                {(searchQuery || selectedModuleId !== null || statusFilter !== 'all' || typeFilter !== 'all') && (
+                  <Button 
+                    onClick={handleResetFilters} 
+                    className="mt-6 flex items-center gap-2 text-xs font-black uppercase tracking-widest rounded-xl"
+                  >
+                    <RotateCcw className="w-4 h-4" /> Réinitialiser les filtres
+                  </Button>
+                )}
+              </div>
+            ) : layoutMode === 'list' ? (
+              /* Sleek Streamlined List View Layout */
+              <div className="flex flex-col gap-4">
+                {examsWithStatus.map((exam, index) => {
+                  const totalPoints = getExamTotalPoints(exam);
+                  const examResult = results.find(r => r.examId === exam.id);
+                  return (
+                    <motion.div
+                      key={exam.id}
+                      initial={{ opacity: 0, x: -10 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: index * 0.03 }}
+                    >
+                      <Card className="hover:border-indigo-200/80 transition-all hover:bg-slate-50/30 p-5 md:p-6 rounded-2xl border border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-6">
+                        <div className="flex-1 space-y-2 min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            {exam.isNew && !exam.hasTaken && (
+                              <span className="text-[8px] font-black bg-rose-500 text-white px-1.5 py-0.5 rounded uppercase tracking-wider animate-pulse">
+                                Nouveau
+                              </span>
+                            )}
+                            <span className="text-[9px] font-black bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded uppercase tracking-wide">
+                              {modules.find(m => m.id === exam.moduleId)?.name || 'Module inconnu'}
+                            </span>
+                            {exam.type && (
+                              <span className={cn(
+                                "text-[9px] font-black px-2 py-0.5 rounded uppercase tracking-wide",
+                                exam.type === 'fin-de-module' ? "text-purple-600 bg-purple-50" : "text-blue-600 bg-blue-50"
+                              )}>
+                                {exam.type === 'fin-de-module' ? 'EFM' : 'CC'}
+                              </span>
+                            )}
+                            <span className="text-[9px] font-bold text-slate-400">
+                              Créé le {new Date(exam.createdAt).toLocaleDateString()}
+                            </span>
+                          </div>
+                          
+                          <h4 className="font-extrabold text-slate-900 text-lg leading-tight truncate">{exam.title}</h4>
+                          <p className="text-xs text-slate-400 line-clamp-1 max-w-2xl">{exam.description || 'Aucune description.'}</p>
+                        </div>
+
+                        {/* Mid Section stats info */}
+                        <div className="flex items-center gap-6 text-slate-500 shrink-0">
+                          <div className="flex flex-col items-center">
+                            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Durée</span>
+                            <span className="text-xs font-bold text-slate-700 flex items-center gap-1 mt-1">
+                              <Clock className="w-3.5 h-3.5 text-slate-400" /> {formatDuration(exam.durationMinutes)}
+                            </span>
+                          </div>
+                          <div className="h-6 w-px bg-slate-100" />
+                          <div className="flex flex-col items-center">
+                            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Questions</span>
+                            <span className="text-xs font-bold text-slate-700 flex items-center gap-1 mt-1">
+                              <ClipboardList className="w-3.5 h-3.5 text-slate-400" /> {exam.questions.length} Qs
+                            </span>
+                          </div>
+                          <div className="h-6 w-px bg-slate-100" />
+                          <div className="flex flex-col items-end">
+                            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest font-mono">Valeur</span>
+                            <span className="text-xs font-black text-amber-600 flex items-center gap-1 mt-1">
+                              <Star className="w-3 fill-amber-400 text-amber-400" /> {totalPoints} pts
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Action buttons columns */}
+                        <div className="shrink-0 min-w-[140px] md:text-right flex md:flex-col justify-end gap-3">
+                          {exam.hasTaken ? (
+                            <div className="flex flex-row md:flex-col items-end gap-2 w-full justify-between md:justify-end">
+                              <span className="px-2.5 py-1 text-[10px] font-extrabold text-emerald-600 bg-emerald-50 rounded-lg inline-flex items-center gap-1">
+                                <CheckCircle2 className="w-3.5 h-3.5" /> Complété
+                              </span>
+                              {examResult && (
+                                <button
+                                  onClick={() => setSelectedResult({ exam, result: examResult })}
+                                  className="text-[10px] font-bold text-indigo-600 hover:text-indigo-800 underline uppercase tracking-wider"
+                                >
+                                  Score: {Number.isInteger(examResult.score) ? examResult.score : examResult.score.toFixed(1)} / {examResult.totalPoints || totalPoints}
+                                </button>
+                              )}
+                            </div>
+                          ) : (
+                            <Button 
+                              onClick={() => onStartExam(exam)} 
+                              size="sm" 
+                              className="rounded-xl text-[10px] uppercase font-black tracking-widest flex items-center gap-1.5"
+                            >
+                              Commencer <ArrowRight className="w-3.5 h-3.5" />
+                            </Button>
+                          )}
+                        </div>
+                      </Card>
+                    </motion.div>
+                  );
+                })}
+              </div>
+            ) : (
+              /* Original Highly Visual Grid Layout */
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                {examsWithStatus.map((exam, index) => {
                   const totalPoints = getExamTotalPoints(exam);
                   const examResult = results.find(r => r.examId === exam.id);
                   return (
@@ -435,11 +770,11 @@ export const StudentDashboard = ({ exams, results, onStartExam, user, modules, n
                         <div className="p-6 flex flex-col h-full bg-white rounded-[1.75rem] transition-colors group-hover:bg-slate-50/50">
                           <div className="flex items-start justify-between mb-4">
                             {exam.isNew && !exam.hasTaken && (
-                             <span className="text-[9px] font-black bg-rose-500 text-white px-2 py-1 rounded-lg uppercase tracking-[0.2em] animate-pulse">
-                               Nouveau
-                             </span>
-                           )}
-                           <span className="text-[10px] font-black bg-indigo-50 text-indigo-600 px-2.5 py-1 rounded-lg uppercase tracking-wider">
+                              <span className="text-[9px] font-black bg-rose-500 text-white px-2 py-1 rounded-lg uppercase tracking-[0.2em] animate-pulse">
+                                Nouveau
+                              </span>
+                            )}
+                            <span className="text-[10px] font-black bg-indigo-50 text-indigo-600 px-2.5 py-1 rounded-lg uppercase tracking-wider">
                               {modules.find(m => m.id === exam.moduleId)?.name || 'Module inconnu'}
                             </span>
                             <span className="text-[10px] font-black text-amber-600 flex items-center gap-1 uppercase tracking-widest bg-amber-50 px-2 py-1 rounded-lg group-hover:scale-110 transition-transform">
@@ -503,9 +838,87 @@ export const StudentDashboard = ({ exams, results, onStartExam, user, modules, n
                       </Card>
                     </motion.div>
                   );
-                })
-              )}
+                })}
+              </div>
+            )}
+          </section>
+
+          {/* 2. Dernières Performances (moved here) */}
+          {results.length > 0 && (
+            <section className="space-y-6">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xl font-black text-slate-900 tracking-tight">Dernières Performances</h3>
+                <div className="w-10 h-10 rounded-xl bg-slate-50 flex items-center justify-center">
+                   <Target className="w-5 h-5 text-slate-300" />
+                </div>
+              </div>
+              <div className="flex gap-4 overflow-x-auto pb-4 no-scrollbar">
+                {[...results].sort((a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime()).slice(0, 4).map(result => {
+                  const exam = exams.find(e => e.id === result.examId);
+                  if (!exam) return null;
+                  const percentage = Math.round((result.score / (result.totalPoints || 1)) * 100);
+                  return (
+                    <Card key={result.id} className="min-w-[280px] p-6 border-2 border-slate-50 hover:border-indigo-100 transition-all cursor-pointer" onClick={() => setSelectedResult({ exam, result })}>
+                      <div className="space-y-4">
+                        <div className="flex justify-between items-start">
+                          <span className="text-[9px] font-black uppercase tracking-widest text-indigo-600 bg-indigo-50 px-2 py-1 rounded">
+                            {modules.find(m => m.id === exam.moduleId)?.name}
+                          </span>
+                          <span className="text-[10px] font-bold text-slate-400">{new Date(result.completedAt).toLocaleDateString()}</span>
+                        </div>
+                        <h4 className="font-black text-slate-900 line-clamp-1">{exam.title}</h4>
+                        <div className="flex items-end justify-between">
+                           <div className="space-y-1">
+                             <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Score</p>
+                             <p className="text-2xl font-black text-slate-900 tracking-tighter">{Number.isInteger(result.score) ? result.score : result.score.toFixed(2)}<span className="text-sm text-slate-300">/{result.totalPoints}</span></p>
+                           </div>
+                           <div className={cn(
+                             "px-3 py-1.5 rounded-xl text-xs font-black",
+                             percentage >= 80 ? "bg-emerald-50 text-emerald-600" : percentage >= 50 ? "bg-amber-50 text-amber-600" : "bg-rose-50 text-rose-600"
+                           )}>
+                             {percentage}%
+                           </div>
+                        </div>
+                      </div>
+                    </Card>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+
+          {/* 3. Class Announcements & Communications segment (moved here) */}
+          <section className="space-y-6">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-10 h-10 rounded-xl bg-indigo-50 flex items-center justify-center shrink-0">
+                  <Bell className="w-5 h-5 text-indigo-600" />
+                </div>
+                <h3 className="text-xl font-black text-slate-900 tracking-tight">Annonces de classe & Communiqués</h3>
+              </div>
+              <span className="text-[10px] font-black uppercase text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-xl">
+                {notifications.length} {notifications.length > 1 ? 'annonces' : 'annonce'}
+              </span>
             </div>
+            {notifications.length === 0 ? (
+              <div className="p-8 text-center bg-slate-50/60 rounded-[2rem] border-2 border-dashed border-slate-100">
+                <p className="text-xs font-black text-slate-400 uppercase tracking-widest leading-none">Aucun communiqué officiel</p>
+                <p className="text-[10px] text-slate-400 mt-2">Votre enseignant n'a publié aucune annonce pour l'instant.</p>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {notifications.map((notif) => (
+                  <DetailedNotificationCard 
+                    key={notif.id} 
+                    notification={notif} 
+                    user={user} 
+                    groups={groups}
+                    filieres={filieres}
+                    onRefresh={onRefresh} 
+                  />
+                ))}
+              </div>
+            )}
           </section>
         </div>
 
@@ -572,6 +985,75 @@ export const StudentDashboard = ({ exams, results, onStartExam, user, modules, n
                 <p className="text-xs font-bold text-slate-400">Passez au moins 2 examens pour voir votre progression.</p>
               </div>
             )}
+          </section>
+
+          {/* Module-by-Module Mastery Progression Track */}
+          <section className="bg-white p-6 rounded-[2.5rem] border-2 border-slate-50 shadow-soft space-y-5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-10 h-10 rounded-xl bg-orange-50 flex items-center justify-center">
+                  <GraduationCap className="w-5 h-5 text-orange-500 animate-pulse" />
+                </div>
+                <div className="space-y-0.5">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">Modules</p>
+                  <h3 className="text-base font-black text-slate-900 tracking-tight">Maîtrise Académique</h3>
+                </div>
+              </div>
+              <span className="text-[9px] font-black uppercase text-orange-600 bg-orange-50 px-2.5 py-1 rounded-lg">
+                {moduleDetailedStats.filter(m => m.completedCount > 0).length} / {modules.length} entamés
+              </span>
+            </div>
+
+            <div className="space-y-4 max-h-[340px] overflow-y-auto pr-1 no-scrollbar">
+              {moduleDetailedStats.map(moduleInfo => {
+                const percentDone = moduleInfo.totalExams > 0 
+                  ? Math.round((moduleInfo.completedCount / moduleInfo.totalExams) * 105) 
+                  : 0;
+                const normalizedPercent = Math.min(percentDone, 100);
+                
+                return (
+                  <div key={moduleInfo.id} className="p-3.5 bg-slate-50/70 rounded-2xl border border-slate-100 space-y-2 group transition-all duration-300 hover:bg-white hover:border-orange-200/50 hover:shadow-soft">
+                    <div className="flex justify-between items-start gap-2">
+                      <div className="min-w-0">
+                        <span className="text-[8px] font-black text-orange-500 bg-orange-50/75 px-1.5 py-0.5 rounded font-mono uppercase tracking-wider">
+                          {moduleInfo.code}
+                        </span>
+                        <h5 className="font-extrabold text-xs text-slate-800 line-clamp-1 mt-1 group-hover:text-orange-500 transition-colors">
+                          {moduleInfo.name}
+                        </h5>
+                      </div>
+                      
+                      {moduleInfo.avg !== -1 ? (
+                        <div className={cn(
+                          "px-2 py-0.5 rounded-lg text-[10px] font-black shrink-0",
+                          moduleInfo.avg >= 80 ? "bg-emerald-50 text-emerald-600" : moduleInfo.avg >= 50 ? "bg-amber-50 text-amber-600" : "bg-rose-50 text-rose-600"
+                        )}>
+                          Avg: {moduleInfo.avg}%
+                        </div>
+                      ) : (
+                        <div className="px-2 py-0.5 bg-slate-100 text-slate-400 rounded-lg text-[9px] font-extrabold shrink-0 uppercase tracking-wider">
+                          0%
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Progress Slider */}
+                    <div className="space-y-1">
+                      <div className="flex justify-between items-center text-[9px] font-bold text-slate-400">
+                        <span>Progression</span>
+                        <span>{moduleInfo.completedCount}/{moduleInfo.totalExams || 1} examens</span>
+                      </div>
+                      <div className="w-full h-1.5 bg-slate-200/60 rounded-full overflow-hidden border border-slate-250/10">
+                        <div 
+                          className="h-full bg-orange-400 rounded-full transition-all duration-700"
+                          style={{ width: `${normalizedPercent}%` }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </section>
 
           {/* Smart Study Recommendations widget */}
@@ -690,6 +1172,8 @@ export const StudentDashboard = ({ exams, results, onStartExam, user, modules, n
         <ResultDetailsModal 
           exam={selectedResult.exam} 
           result={selectedResult.result} 
+          user={user}
+          modules={modules}
           onClose={() => setSelectedResult(null)} 
         />
       )}

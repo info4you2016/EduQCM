@@ -24,6 +24,8 @@ export const AuditLogsView = () => {
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
   const [selectedLog, setSelectedLog] = useState<AuditLog | null>(null);
   const [liveMode, setLiveMode] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
 
   useEffect(() => {
     fetchLogs(); // Initial fetch
@@ -32,20 +34,28 @@ export const AuditLogsView = () => {
   useEffect(() => {
     let interval: any;
     if (liveMode) {
-      interval = setInterval(fetchLogs, 5000); // Poll every 5s in live mode
+      interval = setInterval(() => fetchLogs(true), 5000); // Poll silently every 5s in live mode
     }
     return () => clearInterval(interval);
   }, [liveMode]);
 
-  const fetchLogs = async () => {
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, filterAction, dateRange]);
+
+  const fetchLogs = async (isSilent = false) => {
     try {
-      setLoading(true);
+      if (!isSilent) {
+        setLoading(true);
+      }
       const data = await api.admin.getLogs();
       setLogs(data);
     } catch (err) {
       console.error("Failed to fetch logs:", err);
     } finally {
-      setLoading(false);
+      if (!isSilent) {
+        setLoading(false);
+      }
     }
   };
 
@@ -122,6 +132,12 @@ export const AuditLogsView = () => {
       return matchesSearch && matchesFilter && matchesDate;
     });
   }, [logs, searchQuery, filterAction, dateRange]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredLogs.length / itemsPerPage));
+  const paginatedLogs = useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    return filteredLogs.slice(startIndex, startIndex + itemsPerPage);
+  }, [filteredLogs, currentPage, itemsPerPage]);
 
   const getActionColor = (action: string) => {
     const a = action.toUpperCase();
@@ -375,8 +391,8 @@ export const AuditLogsView = () => {
                     </td>
                   </tr>
                 ))
-              ) : filteredLogs.length > 0 ? (
-                filteredLogs.map((log) => (
+              ) : paginatedLogs.length > 0 ? (
+                paginatedLogs.map((log) => (
                   <tr key={log.id} className="group hover:bg-slate-50 transition-all duration-300">
                     <td className="px-6 py-5 whitespace-nowrap">
                       <div className="flex flex-col gap-0.5">
@@ -456,10 +472,51 @@ export const AuditLogsView = () => {
           </table>
         </div>
         
-        <div className="p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
-           <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">
-             Affichage de {filteredLogs.length} sur {logs.length} entrées
-           </p>
+        <div className="p-5 bg-slate-50 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-4">
+           <div className="flex flex-col sm:flex-row sm:items-center gap-4 w-full sm:w-auto">
+             <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.15em] text-center sm:text-left">
+               Affichage {filteredLogs.length > 0 ? (currentPage - 1) * itemsPerPage + 1 : 0} à {Math.min(currentPage * itemsPerPage, filteredLogs.length)} sur {filteredLogs.length} entrées (total: {logs.length})
+             </span>
+             <select
+               value={itemsPerPage}
+               onChange={(e) => {
+                 setItemsPerPage(Number(e.target.value));
+                 setCurrentPage(1);
+               }}
+               className="text-[10px] font-black uppercase tracking-widest bg-white border border-slate-200 rounded-xl px-2.5 py-1.5 text-slate-500 focus:outline-none cursor-pointer hover:border-slate-300 transition-colors w-full sm:w-auto text-center"
+             >
+               <option value={10}>10 par page</option>
+               <option value={20}>20 par page</option>
+               <option value={50}>50 par page</option>
+               <option value={100}>100 par page</option>
+             </select>
+           </div>
+           
+           {totalPages > 1 && (
+             <div className="flex items-center justify-center gap-2 w-full sm:w-auto">
+               <Button 
+                 variant="outline" 
+                 size="sm" 
+                 disabled={currentPage === 1}
+                 onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                 className="h-8 px-4 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all border-slate-200 text-slate-500 hover:text-indigo-600 bg-white"
+               >
+                 Précédent
+               </Button>
+               <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest px-2 min-w-[100px] text-center">
+                 Page {currentPage} sur {totalPages}
+               </span>
+               <Button 
+                 variant="outline" 
+                 size="sm" 
+                 disabled={currentPage === totalPages}
+                 onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                 className="h-8 px-4 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all border-slate-200 text-slate-500 hover:text-indigo-600 bg-white"
+               >
+                 Suivant
+               </Button>
+             </div>
+           )}
         </div>
       </Card>
 

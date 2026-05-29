@@ -141,8 +141,10 @@
   #export-container,
   #results-export-container,
   #pv-export-container,
+  #attestation-export-container,
   .pdf-export-content,
   .pv-export-content,
+  .attestation-export-content,
   .printable-area {
     display: block !important;
     visibility: visible !important;
@@ -161,15 +163,15 @@
   }
 
   /* Try to isolate and show only the printable content when active */
-  body:has(#export-container, #results-export-container, #pv-export-container, .pdf-export-content, .pv-export-content) {
+  body:has(#export-container, #results-export-container, #pv-export-container, #attestation-export-container, .pdf-export-content, .pv-export-content, .attestation-export-content) {
     overflow: visible !important;
   }
   
-  body:has(#export-container, #results-export-container, #pv-export-container, .pdf-export-content, .pv-export-content) > :not(#export-container):not(#results-export-container):not(#pv-export-container):not(.pdf-export-content):not(.pv-export-content):not(#root) {
+  body:has(#export-container, #results-export-container, #pv-export-container, #attestation-export-container, .pdf-export-content, .pv-export-content, .attestation-export-content) > :not(#export-container):not(#results-export-container):not(#pv-export-container):not(#attestation-export-container):not(.pdf-export-content):not(.pv-export-content):not(.attestation-export-content):not(#root) {
     display: none !important;
   }
 
-  body:has(#export-container, #results-export-container, #pv-export-container, .pdf-export-content, .pv-export-content) #root > :not(:has(#export-container, #results-export-container, #pv-export-container, .pdf-export-content, .pv-export-content)) {
+  body:has(#export-container, #results-export-container, #pv-export-container, #attestation-export-container, .pdf-export-content, .pv-export-content, .attestation-export-content) #root > :not(:has(#export-container, #results-export-container, #pv-export-container, #attestation-export-container, .pdf-export-content, .pv-export-content, .attestation-export-content)) {
     display: none !important;
   }
 
@@ -185,7 +187,7 @@
     margin: 12mm 15mm 12mm 15mm;
   }
 
-  #pv-export-container, .pv-export-content {
+  #pv-export-container, .pv-export-content, #attestation-export-container, .attestation-export-content {
     page: pv-landscape-page;
     width: 100% !important;
     max-width: 100% !important;
