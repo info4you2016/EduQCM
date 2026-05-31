@@ -678,12 +678,12 @@ export const TeacherDashboard = ({
 
   const filteredExams = useMemo(() => {
     return exams
-      .filter(e => e.title.toLowerCase().includes(searchQuery.toLowerCase()))
+      .filter(e => (e.title || '').toLowerCase().includes(searchQuery.toLowerCase()))
       .sort((a, b) => {
         if (sortBy === 'createdAt') {
           return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
         }
-        return a.title.localeCompare(b.title);
+        return (a.title || '').localeCompare(b.title || '');
       });
   }, [exams, searchQuery, sortBy]);
 

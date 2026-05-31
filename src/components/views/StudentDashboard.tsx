@@ -51,7 +51,7 @@ export const StudentDashboard = ({ exams, results, onStartExam, user, modules, n
     let completed = 0;
 
     exams.forEach(e => {
-      const matchesSearch = e.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
+      const matchesSearch = (e.title || '').toLowerCase().includes(searchQuery.toLowerCase()) || 
         (modules.find(m => m.id === e.moduleId)?.name || '').toLowerCase().includes(searchQuery.toLowerCase());
       const matchesModule = selectedModuleId === null || e.moduleId === selectedModuleId;
       const matchesType = typeFilter === 'all' || e.type === typeFilter;
@@ -101,7 +101,7 @@ export const StudentDashboard = ({ exams, results, onStartExam, user, modules, n
         if (sortBy === 'createdAt') {
           return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
         }
-        return a.title.localeCompare(b.title);
+        return (a.title || '').localeCompare(b.title || '');
       });
   }, [exams, results, searchQuery, modules, sortBy, selectedModuleId, statusFilter, typeFilter]);
 
