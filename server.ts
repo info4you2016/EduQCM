@@ -1529,11 +1529,11 @@ Instructions pour le feedback :
         ORDER BY m.createdAt DESC
       `).all(req.user.id);
     } else {
-      // Students only see modules assigned to their filiere
+      // Students see modules assigned to their filiere OR general modules (filiereId IS NULL)
       modules = db.prepare(`
         SELECT m.*, (SELECT COUNT(*) FROM exams e WHERE e.moduleId = m.id) as examsCount
         FROM modules m 
-        WHERE m.filiereId = ?
+        WHERE m.filiereId = ? OR m.filiereId IS NULL
         ORDER BY m.createdAt DESC
       `).all(req.user.filiereId);
     }
@@ -1647,21 +1647,24 @@ Instructions pour le feedback :
     if (isTeacher) {
       exams = db.prepare(`
         SELECT e.*, (SELECT COUNT(*) FROM results r WHERE r.examId = e.id) as resultsCount,
-               g.name as groupName
+               g.name as groupName, m.name as moduleName
         FROM exams e 
         LEFT JOIN groups g ON e.groupId = g.id
+        LEFT JOIN modules m ON e.moduleId = m.id
         WHERE e.teacherId = ?
         ORDER BY e.createdAt DESC
       `).all(req.user.id);
     } else {
-      // Students only see exams for modules assigned to their filiere AND active for their group
+      // Students see active exams for their assigned group, including modules that are specific to filiere OR common (null filiereId)
       exams = db.prepare(`
-        SELECT e.*, (SELECT COUNT(*) FROM results r WHERE r.examId = e.id) as resultsCount
+        SELECT e.*, (SELECT COUNT(*) FROM results r WHERE r.examId = e.id) as resultsCount,
+               m.name as moduleName, es.startTime as sessionStartTime
         FROM exams e 
         JOIN modules m ON e.moduleId = m.id
-        WHERE m.filiereId = ? AND e.status = 'active' AND e.groupId = ?
+        LEFT JOIN exam_sessions es ON es.examId = e.id AND es.userId = ?
+        WHERE (m.filiereId = ? OR m.filiereId IS NULL) AND e.status = 'active' AND e.groupId = ?
         ORDER BY e.createdAt DESC
-      `).all(req.user.filiereId, req.user.groupId);
+      `).all(req.user.id, req.user.filiereId, req.user.groupId);
     }
     
     const parsedExams = exams.map((e: any) => ({ 
@@ -1810,6 +1813,7 @@ Instructions pour le feedback :
         // Create session on first request (this maps to "Commencer l'examen" or resuming/loading start)
         db.prepare("INSERT INTO exam_sessions (userId, examId, startTime) VALUES (?, ?, ?)").run(userId, examId, now);
         session = { startTime: now };
+        clearCache('exams'); // Invalidate student-level exams list cache to reflect the ongoing session
       }
 
       res.json({
@@ -2377,6 +2381,7 @@ Instructions pour le feedback :
       }
 
       console.log(`[API] Server-side result securely grading saved with db id ${result.lastInsertRowid}`);
+      clearCache('exams');
       clearCache('results');
       io.emit("data-update");
       res.json({ id: Number(result.lastInsertRowid), examId, studentId: req.user.id, score, totalQuestions, totalPoints, answers, questionResults, aiFeedback });

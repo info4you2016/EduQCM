@@ -51,6 +51,13 @@ export const ExamsTab = ({
 }: ExamsTabProps) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'createdAt' | 'title'>('createdAt');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(6);
+
+  // Reset page when sorting/filtering changes
+  React.useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, sortBy]);
 
   const filteredExams = useMemo(() => {
     return exams
@@ -62,6 +69,12 @@ export const ExamsTab = ({
         return a.title.localeCompare(b.title);
       });
   }, [exams, searchQuery, sortBy]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredExams.length / itemsPerPage));
+  const paginatedExams = useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    return filteredExams.slice(startIndex, startIndex + itemsPerPage);
+  }, [filteredExams, currentPage, itemsPerPage]);
 
   return (
     <div className="space-y-8">
@@ -106,7 +119,7 @@ export const ExamsTab = ({
         {filteredExams.length === 0 ? (
           <div className="col-span-full"><EmptyState message="Aucun examen trouvé." /></div>
         ) : (
-          filteredExams.map(exam => {
+          paginatedExams.map(exam => {
             const examResults = results.filter(r => r.examId === exam.id);
             const module = modules.find(m => m.id === exam.moduleId);
             
@@ -295,6 +308,54 @@ export const ExamsTab = ({
           })
         )}
       </div>
+
+      {/* Pagination Controls */}
+      {totalPages > 1 && (
+        <div className="p-5 bg-white border border-slate-100 rounded-[2rem] shadow-sm flex flex-col sm:flex-row items-center justify-between gap-4 mt-8">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-4 w-full sm:w-auto">
+            <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.15em] text-center sm:text-left">
+              Affichage {filteredExams.length > 0 ? (currentPage - 1) * itemsPerPage + 1 : 0} à {Math.min(currentPage * itemsPerPage, filteredExams.length)} sur {filteredExams.length} examens (total: {exams.length})
+            </span>
+            <select
+              value={itemsPerPage}
+              onChange={(e) => {
+                setItemsPerPage(Number(e.target.value));
+                setCurrentPage(1);
+              }}
+              className="text-[10px] font-black uppercase tracking-widest bg-slate-50 border-2 border-transparent focus:border-indigo-500/20 rounded-xl px-2.5 py-1.5 text-slate-500 focus:outline-none cursor-pointer hover:border-slate-300 transition-all w-full sm:w-auto text-center"
+            >
+              <option value={4}>4 par page</option>
+              <option value={6}>6 par page</option>
+              <option value={10}>10 par page</option>
+              <option value={20}>20 par page</option>
+            </select>
+          </div>
+          
+          <div className="flex items-center justify-center gap-2 w-full sm:w-auto">
+            <Button 
+              variant="outline" 
+              size="sm" 
+              disabled={currentPage === 1}
+              onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+              className="h-8 px-4 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all border-slate-200 text-slate-500 hover:text-indigo-600 bg-white"
+            >
+              Précédent
+            </Button>
+            <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest px-2 min-w-[100px] text-center">
+              Page {currentPage} sur {totalPages}
+            </span>
+            <Button 
+              variant="outline" 
+              size="sm" 
+              disabled={currentPage === totalPages}
+              onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+              className="h-8 px-4 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all border-slate-200 text-slate-500 hover:text-indigo-600 bg-white"
+            >
+              Suivant
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

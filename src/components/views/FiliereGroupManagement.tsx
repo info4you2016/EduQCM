@@ -216,12 +216,40 @@ export const FiliereGroupManagement = ({ filieres, groups, onRefresh, mode = 'al
   const [editingGroup, setEditingGroup] = useState<Group | null>(null);
   const [viewingGroupStudents, setViewingGroupStudents] = useState<Group | null>(null);
 
+  const [filierePage, setFilierePage] = useState(1);
+  const [groupPage, setGroupPage] = useState(1);
+
+  const filiereItemsPerPage = 4;
+  const groupItemsPerPage = 4;
+
   const groupsWithFiliere = useMemo(() => {
     return groups.map(g => ({
       ...g,
       filiere: filieres.find(f => f.id === g.filiereId)
     }));
   }, [groups, filieres]);
+
+  const totalFilierePages = Math.max(1, Math.ceil(filieres.length / filiereItemsPerPage));
+  const paginatedFilieres = useMemo(() => {
+    return filieres.slice((filierePage - 1) * filiereItemsPerPage, filierePage * filiereItemsPerPage);
+  }, [filieres, filierePage]);
+
+  const totalGroupPages = Math.max(1, Math.ceil(groupsWithFiliere.length / groupItemsPerPage));
+  const paginatedGroups = useMemo(() => {
+    return groupsWithFiliere.slice((groupPage - 1) * groupItemsPerPage, groupPage * groupItemsPerPage);
+  }, [groupsWithFiliere, groupPage]);
+
+  useEffect(() => {
+    if (filierePage > totalFilierePages) {
+      setFilierePage(totalFilierePages);
+    }
+  }, [filieres.length, totalFilierePages, filierePage]);
+
+  useEffect(() => {
+    if (groupPage > totalGroupPages) {
+      setGroupPage(totalGroupPages);
+    }
+  }, [groupsWithFiliere.length, totalGroupPages, groupPage]);
 
   const handleDeleteFiliere = async (id: number) => {
     if (!confirm("Voulez-vous vraiment supprimer cette filière ?")) return;
@@ -270,7 +298,7 @@ export const FiliereGroupManagement = ({ filieres, groups, onRefresh, mode = 'al
               {filieres.length === 0 ? (
                 <EmptyState message="Aucune filière créée." />
               ) : (
-                filieres.map(f => (
+                paginatedFilieres.map(f => (
                   <Card key={f.id} className="p-5 flex items-center justify-between group border-none shadow-xl shadow-slate-200/40 hover:-translate-y-1 transition-all duration-300">
                     <div className="cursor-pointer flex-1" onClick={() => setEditingFiliere(f)}>
                       <div className="flex items-center gap-2 mb-1">
@@ -316,6 +344,35 @@ export const FiliereGroupManagement = ({ filieres, groups, onRefresh, mode = 'al
               >
                 <Plus className="w-4 h-4" /> Ajouter une filière
               </button>
+
+              {/* Filières Pagination */}
+              {totalFilierePages > 1 && (
+                <div className="flex items-center justify-between p-3.5 bg-white border border-slate-100 rounded-2xl shadow-sm mt-3">
+                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                    Page {filierePage} / {totalFilierePages}
+                  </span>
+                  <div className="flex gap-1.5">
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      disabled={filierePage === 1}
+                      onClick={() => setFilierePage(p => Math.max(1, p - 1))}
+                      className="h-7 px-2.5 text-[9px] font-black uppercase tracking-wider rounded-lg"
+                    >
+                      Précédent
+                    </Button>
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      disabled={filierePage === totalFilierePages}
+                      onClick={() => setFilierePage(p => Math.min(totalFilierePages, p + 1))}
+                      className="h-7 px-2.5 text-[9px] font-black uppercase tracking-wider rounded-lg"
+                    >
+                      Suivant
+                    </Button>
+                  </div>
+                </div>
+              )}
             </div>
           </section>
         )}
@@ -333,7 +390,7 @@ export const FiliereGroupManagement = ({ filieres, groups, onRefresh, mode = 'al
               {groupsWithFiliere.length === 0 ? (
                 <EmptyState message="Aucun groupe créé." />
               ) : (
-                groupsWithFiliere.map(g => (
+                paginatedGroups.map(g => (
                   <Card key={g.id} className="p-5 flex items-center justify-between group border-none shadow-xl shadow-slate-200/40 hover:-translate-y-1 transition-all duration-300">
                     <div className="cursor-pointer flex-1" onClick={() => setViewingGroupStudents(g)}>
                       <div className="flex items-center gap-2 mb-1">
@@ -379,6 +436,35 @@ export const FiliereGroupManagement = ({ filieres, groups, onRefresh, mode = 'al
               >
                 <Plus className="w-4 h-4" /> Ajouter un groupe
               </button>
+
+              {/* Groupes Pagination */}
+              {totalGroupPages > 1 && (
+                <div className="flex items-center justify-between p-3.5 bg-white border border-slate-100 rounded-2xl shadow-sm mt-3">
+                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                    Page {groupPage} / {totalGroupPages}
+                  </span>
+                  <div className="flex gap-1.5">
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      disabled={groupPage === 1}
+                      onClick={() => setGroupPage(p => Math.max(1, p - 1))}
+                      className="h-7 px-2.5 text-[9px] font-black uppercase tracking-wider rounded-lg"
+                    >
+                      Précédent
+                    </Button>
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      disabled={groupPage === totalGroupPages}
+                      onClick={() => setGroupPage(p => Math.min(totalGroupPages, p + 1))}
+                      className="h-7 px-2.5 text-[9px] font-black uppercase tracking-wider rounded-lg"
+                    >
+                      Suivant
+                    </Button>
+                  </div>
+                </div>
+              )}
             </div>
           </section>
         )}

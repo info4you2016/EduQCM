@@ -589,12 +589,34 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
     
     return Math.max(0, Math.min(100, integrity));
   }, [tabExitCount, fullscreenExitsCount, auditEvents]);
+  const [isFullscreenUnsupported, setIsFullscreenUnsupported] = useState(() => {
+    if (typeof document === 'undefined') return false;
+    const isFsEnabled = !!(
+      document.fullscreenEnabled || 
+      (document as any).webkitFullscreenEnabled || 
+      (document as any).mozFullScreenEnabled || 
+      (document as any).msFullscreenEnabled
+    );
+    return !isFsEnabled;
+  });
   const [isPausedByFullscreen, setIsPausedByFullscreen] = useState(false);
   const [showFullscreenWarningModal, setShowFullscreenWarningModal] = useState(false);
   const [showTabExitWarningModal, setShowTabExitWarningModal] = useState(false);
   const [needsFullscreenRestore, setNeedsFullscreenRestore] = useState(() => {
     const started = !!localStorage.getItem(`exam_start_${exam.id}_${user.id}`);
     if (!started) return false;
+    
+    // If browser does not support fullscreen, don't demand full screen restoration
+    if (typeof document !== 'undefined') {
+      const isFsEnabled = !!(
+        document.fullscreenEnabled || 
+        (document as any).webkitFullscreenEnabled || 
+        (document as any).mozFullScreenEnabled || 
+        (document as any).msFullscreenEnabled
+      );
+      if (!isFsEnabled) return false;
+    }
+
     const isFull = !!(
       document.fullscreenElement ||
       (document as any).webkitFullscreenElement ||
@@ -659,8 +681,19 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
 
   const MAX_TAB_EXITS = 3;
 
-  const enterFullscreen = async () => {
+  const enterFullscreen = async (): Promise<boolean> => {
     try {
+      const isFsEnabled = typeof document !== 'undefined' && !!(
+        document.fullscreenEnabled || 
+        (document as any).webkitFullscreenEnabled || 
+        (document as any).mozFullScreenEnabled || 
+        (document as any).msFullscreenEnabled
+      );
+      if (!isFsEnabled) {
+        console.warn("Fullscreen is not supported or permitted in this context.");
+        return false;
+      }
+
       const docEl = document.documentElement as any;
       if (docEl.requestFullscreen) {
         await docEl.requestFullscreen();
@@ -671,14 +704,22 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
       } else if (docEl.msRequestFullscreen) {
         await docEl.msRequestFullscreen();
       }
+      return true;
     } catch (err) {
       console.warn("Fullscreen request failed", err);
+      return false;
     }
   };
 
   const handleRestoreFullscreen = async () => {
-    await enterFullscreen();
-    setNeedsFullscreenRestore(false);
+    const success = await enterFullscreen();
+    if (success) {
+      setNeedsFullscreenRestore(false);
+    } else {
+      setIsFullscreenUnsupported(true);
+      setNeedsFullscreenRestore(false);
+      toast.error("Le mode plein écran n'a pas pu être activé. Vous pouvez passer l'examen dans cette fenêtre.");
+    }
   };
 
   const exitFullscreen = async () => {
@@ -723,7 +764,7 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
 
   // Fullscreen Change Listener & Warnings
   useEffect(() => {
-    if (!hasStarted || showCompletion || isSubmitting) return;
+    if (!hasStarted || showCompletion || isSubmitting || isFullscreenUnsupported) return;
 
     const handleFullscreenChange = () => {
       const isFull = !!(
@@ -802,7 +843,7 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
       document.removeEventListener('mozfullscreenchange', handleFullscreenChange);
       document.removeEventListener('MSFullscreenChange', handleFullscreenChange);
     };
-  }, [hasStarted, showCompletion, isSubmitting, exam.id, user.id, user.displayName, user.registrationNumber]);
+  }, [hasStarted, showCompletion, isSubmitting, exam.id, user.id, user.displayName, user.registrationNumber, isFullscreenUnsupported]);
 
   // Synchroniser la progression de l'étudiant via Socket.io
   useEffect(() => {
@@ -1349,7 +1390,11 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
     const now = Date.now();
     localStorage.setItem(`exam_start_${exam.id}_${user.id}`, now.toString());
     setHasStarted(true);
-    await enterFullscreen();
+    const success = await enterFullscreen();
+    if (!success) {
+      setIsFullscreenUnsupported(true);
+      toast.error("Le mode plein écran n'a pas pu être activé. Vous pouvez passer l'examen dans cette fenêtre.");
+    }
     // Immediate eager sync
     setTimeout(() => {
       syncTimerWithServer();
@@ -1698,8 +1743,14 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
               </div>
               <Button 
                 onClick={async () => {
-                  await enterFullscreen();
-                  setIsPausedByFullscreen(false);
+                  const success = await enterFullscreen();
+                  if (!success) {
+                    setIsFullscreenUnsupported(true);
+                    setIsPausedByFullscreen(false);
+                    toast.error("Le mode plein écran n'a pas pu être activé. Vous pouvez passer l'examen dans cette fenêtre.");
+                  } else {
+                    setIsPausedByFullscreen(false);
+                  }
                 }} 
                 className="w-full py-5 h-auto bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl text-sm font-black uppercase tracking-widest flex items-center justify-center gap-2 shadow-xl"
               >
@@ -1727,8 +1778,14 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
               <div className="pt-4">
                 <Button 
                   onClick={async () => {
-                    await enterFullscreen();
-                    setShowFullscreenWarningModal(false);
+                    const success = await enterFullscreen();
+                    if (!success) {
+                      setIsFullscreenUnsupported(true);
+                      setShowFullscreenWarningModal(false);
+                      toast.error("Le mode plein écran n'a pas pu être activé. Vous pouvez passer l'examen dans cette fenêtre.");
+                    } else {
+                      setShowFullscreenWarningModal(false);
+                    }
                   }} 
                   className="w-full py-5 h-auto bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl text-sm font-black uppercase tracking-widest"
                 >

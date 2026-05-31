@@ -87,6 +87,8 @@ export interface Exam {
   status: 'draft' | 'active';
   groupId?: number;
   groupName?: string;
+  moduleName?: string;
+  sessionStartTime?: number;
   createdAt: string;
   hasResults?: boolean;
 }

@@ -489,7 +489,7 @@ export default function App() {
               <ExamView 
                 exam={activeExam} 
                 user={user}
-                moduleName={modules.find(m => m.id === activeExam.moduleId)?.name}
+                moduleName={activeExam.moduleName || modules.find(m => m.id === activeExam.moduleId)?.name}
                 onComplete={async () => {
                   await fetchData();
                   setView('dashboard');

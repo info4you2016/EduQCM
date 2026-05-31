@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Award, ShieldCheck, GraduationCap, Calendar, Compass, BarChart, Download, Printer } from 'lucide-react';
-import { Exam, Result, UserProfile } from '../types';
+import { Exam, Result, UserProfile, OrganizationSettings } from '../types';
 import { exportHtmlElementToPdf } from '../lib/pdfExport';
 import { toast } from 'react-hot-toast';
+import { api } from '../lib/api';
 
 interface AttestationTemplateProps {
   exam: Exam;
@@ -35,29 +36,63 @@ export const downloadAttestationPDF = async (
 };
 
 async function triggerPDFGeneration(element: HTMLElement, exam: Exam, result: Result, user: UserProfile) {
-  const originalClassName = element.className;
-  
   // Create toast notification
   const toastId = toast.loading("Génération de l'attestation PDF en haute définition...");
   
+  // Create a clean landscape sandbox container on document.body as absolute/fixed
+  // Positioned at (0,0) with z-index in background so that getBoundingClientRect computes positive, perfect layout bounds in html2canvas
+  const sandbox = document.createElement('div');
+  sandbox.style.position = 'fixed';
+  sandbox.style.top = '0';
+  sandbox.style.left = '0';
+  sandbox.style.width = '297mm';
+  sandbox.style.height = '210mm';
+  sandbox.style.overflow = 'hidden';
+  sandbox.style.zIndex = '-9999';
+  sandbox.style.backgroundColor = '#ffffff';
+  sandbox.style.pointerEvents = 'none';
+  document.body.appendChild(sandbox);
+  
+  // Clone element to prevent polluting or flashing the live UI
+  const clone = element.cloneNode(true) as HTMLElement;
+  clone.id = "attestation-pdf-capture-clone";
+  
+  // Force clean landscape metrics for printing/exporting on the cloned node
+  clone.style.display = 'block';
+  clone.style.visibility = 'visible';
+  clone.style.width = '297mm';
+  clone.style.height = '210mm';
+  clone.style.position = 'static';
+  clone.style.margin = '0';
+  clone.style.padding = '12mm 15mm';
+  clone.style.backgroundColor = '#ffffff';
+  clone.style.color = '#000000';
+  clone.style.boxSizing = 'border-box';
+  clone.style.border = '15px double #1e1b4b';
+  
+  // Copy styles/classes specifically for attestation high fidelity
+  clone.className = "attestation-export-content bg-white text-slate-900 border-double block";
+  
+  // Append within sandbox
+  sandbox.appendChild(clone);
+  
   try {
-    // Temporarily replace classes to prevent any "hidden" or screen media overrides
-    element.className = "attestation-export-content mx-auto bg-white text-slate-900 border-double block";
-    
-    const studentCleanName = (result.studentName || user.displayName || 'Stagiaire').trim().replace(/[^a-zA-Z0-9]/g, '_');
-    const examCleanTitle = exam.title.trim().replace(/[^a-zA-Z0-9]/g, '_');
+    const studentCleanName = (result?.studentName || user?.displayName || 'Stagiaire').trim().replace(/[^a-zA-Z0-9]/g, '_');
+    const examCleanTitle = (exam?.title || 'Examen').trim().replace(/[^a-zA-Z0-9]/g, '_');
     const filename = `Attestation_${studentCleanName}_${examCleanTitle}.pdf`;
     
-    // Call high-fidelity export utility in landscape mode
-    await exportHtmlElementToPdf(element, filename, 'l');
+    // Call high-fidelity export utility in landscape mode on our pristine clone
+    await exportHtmlElementToPdf(clone, filename, 'l');
     
     toast.success("Votre attestation a été téléchargée avec succès !", { id: toastId });
   } catch (err) {
     console.error("Failed to generate attestation PDF:", err);
     toast.error("Échec de la génération automatique du PDF.", { id: toastId });
   } finally {
-    // Restore original classes
-    element.className = originalClassName;
+    // Safely remove sandbox
+    if (sandbox.parentNode) {
+      sandbox.parentNode.removeChild(sandbox);
+    }
   }
 }
 
@@ -194,11 +229,30 @@ function triggerIframePrint(element: Element) {
 }
 
 export const AttestationTemplate = ({ exam, result, user, moduleName, isPreview = false }: AttestationTemplateProps) => {
-  const percentage = Math.round((result.score / (result.totalPoints || 1)) * 100);
+  const [settings, setSettings] = useState<OrganizationSettings | null>(null);
+  const [imgError, setImgError] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    api.settings.get()
+      .then((data) => {
+        if (active) {
+          setSettings(data);
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to load settings in AttestationTemplate", err);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const percentage = Math.round(((result?.score || 0) / (result?.totalPoints || exam?.questions?.reduce((acc, q) => acc + (q.points || 0), 0) || 1)) * 100);
   const isPassed = percentage >= 50;
 
   // Format date
-  const completeDate = result.completedAt ? new Date(result.completedAt) : new Date();
+  const completeDate = result?.completedAt ? new Date(result.completedAt) : new Date();
   const formattedDate = completeDate.toLocaleDateString('fr-FR', {
     day: '2-digit',
     month: 'long',
@@ -207,8 +261,8 @@ export const AttestationTemplate = ({ exam, result, user, moduleName, isPreview 
 
   // Generate unique certificate hash for authenticity
   const generateVerificationCode = () => {
-    const p1 = String(exam.id).padStart(3, '0');
-    const p2 = String(user.id).padStart(3, '0');
+    const p1 = String(exam?.id || 0).padStart(3, '0');
+    const p2 = String(user?.id || 0).padStart(3, '0');
     const p3 = completeDate.getTime().toString(36).substring(4, 9).toUpperCase();
     return `CERT-${p1}-${p2}-${p3}`;
   };
@@ -229,22 +283,26 @@ export const AttestationTemplate = ({ exam, result, user, moduleName, isPreview 
   return (
     <div 
       id={isPreview ? "attestation-preview-container" : "attestation-export-container"}
-      className={`${isPreview ? 'w-full max-w-3xl border-4' : 'pv-export-content hidden md:block attestation-export-print'} attestation-export-content mx-auto bg-white text-slate-900 border-double`}
+      className={`${isPreview ? 'w-full max-w-3xl border-double border-[10px] p-2 relative flex flex-col' : 'pv-export-content  attestation-export-print attestation-export-content border-double'} mx-auto bg-white text-slate-900`}
       style={isPreview ? {
-        borderColor: '#e2e8f0',
+        borderColor: '#1e1b4b',
         fontFamily: "'Inter', sans-serif",
+        position: 'relative',
+        aspectRatio: '1.414 / 1',
+        minHeight: '340px',
       } : {
         width: '297mm',
         height: '210mm',
-        margin: '0 auto',
         padding: '12mm 15mm',
         backgroundColor: '#ffffff',
         color: '#000000',
-        fontFamily: "'Times New Roman', Times, serif",
+        fontFamily: "'Inter', sans-serif",
         boxSizing: 'border-box',
         border: '15px double #1e1b4b', // Royal indigo double border
-        position: 'relative',
-        display: 'none' // Hidden on screen, shown on print thanks to index.css
+        position: 'fixed',
+        left: '-9999px',
+        top: '-9999px',
+        zIndex: -9999,
       }}
     >
       {/* CSS overrides inside the template for absolute print precision */}
@@ -286,24 +344,64 @@ export const AttestationTemplate = ({ exam, result, user, moduleName, isPreview 
         )}
 
         {/* Header Block */}
-        <div className="text-center space-y-2">
-          <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-400">
-            Plateforme d'Évaluation Académique & de Certification
-          </p>
-          <div className="flex items-center justify-center gap-1.5 my-1">
-            <span className="h-1 w-12 bg-amber-500 rounded-full" />
-            <GraduationCap className="w-5 h-5 text-indigo-900" />
-            <span className="h-1 w-12 bg-amber-500 rounded-full" />
+        <div className="grid grid-cols-3 gap-2 items-center border-b border-indigo-900/10 pb-4 min-h-[105px] select-none">
+          {/* Left Column: Organization French */}
+          <div className="text-left space-y-0.5 leading-tight flex flex-col justify-center">
+            <p className="text-[8px] font-bold tracking-wider text-indigo-950 uppercase">
+              {settings?.regionName || 'ROYAUME DU MAROC'}
+            </p>
+            <p className="text-[8px] font-black text-indigo-900 uppercase">
+              {settings?.orgNameFrench || 'Office de la Formation Professionnelle et de la promotion du travail'}
+            </p>
+            <p className="text-[7.5px] font-medium text-slate-500">
+              {settings?.regionalDirection || 'Direction Régionale De BM-KH'}
+            </p>
+            <p className="text-[7.5px] font-bold text-slate-850">
+              {settings?.institutionName || 'ISTA AL HASSANIA'}
+            </p>
           </div>
-          <p className="text-[11px] font-black tracking-widest text-indigo-950 uppercase">
-            RÉPUBLIQUE MAROCAINE • ÉTABLISSEMENT DE FORMATION PROFESSIONNELLE
-          </p>
+
+          {/* Middle Column: Logo and Mini Badges/Cap */}
+          <div className="text-center flex flex-col items-center justify-center space-y-1 self-center">
+            {settings?.orgLogoUrl && !imgError ? (
+              <img 
+                src={settings.orgLogoUrl} 
+                alt="Logo" 
+                className="h-14 max-w-[150px] object-contain mx-auto" 
+                referrerPolicy="no-referrer"
+                onError={() => setImgError(true)}
+              />
+            ) : (
+              <div className="w-12 h-12 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-900 border border-indigo-150">
+                <GraduationCap className="w-6 h-6" />
+              </div>
+            )}
+            <p className="text-[7.5px] text-amber-600 font-bold uppercase tracking-wider leading-none mt-1">
+              Année : {settings?.academicYear || '2024/2025'}
+            </p>
+          </div>
+
+          {/* Right Column: Organization Arabic */}
+          <div className="text-right space-y-0.5 leading-tight flex flex-col justify-center items-stretch w-full" style={{ direction: 'rtl', textAlign: 'right' }}>
+            <p className="text-[9px] font-bold text-indigo-950 w-full" style={{ textAlign: 'right' }}>
+              المملكة المغربية
+            </p>
+            <p className="text-[8.5px] font-black text-indigo-900 w-full" style={{ textAlign: 'right' }}>
+              {settings?.orgNameArabic || 'مكتب التكوين المهني وإنعاش الشغل'}
+            </p>
+            <p className="text-[7.5px] font-medium text-slate-500 w-full" style={{ textAlign: 'right' }}>
+              {settings?.regionalDirection ? 'المديرية الجهوية' : ''}
+            </p>
+            <p className="text-[7.5px] font-bold text-slate-800 w-full" style={{ textAlign: 'right' }}>
+              {settings?.orgSubName || 'DRBMKH'}
+            </p>
+          </div>
         </div>
 
         {/* Certificate Title */}
         <div className="text-center my-4">
           <h2 className="text-2xl md:text-3xl font-black text-indigo-950 uppercase tracking-wide">
-            {isPassed ? "Attestation de Réussite" : "Attestation de Passage d'Examen"}
+            {isPassed ? "Attestation de Réussite de Module" : "Attestation de Passage de Module"}
           </h2>
           <p className="text-[10px] md:text-xs text-amber-600 font-serif italic mt-1">
             {isPassed ? "Certificatif d'acquisition de compétences académiques" : "Attestation nominative de participation pour l'évaluation"}
@@ -318,39 +416,50 @@ export const AttestationTemplate = ({ exam, result, user, moduleName, isPreview 
           
           <div className="space-y-1">
             <p className="text-xl md:text-2xl font-black text-indigo-950 font-sans uppercase tracking-tight">
-              {result.studentName || user.displayName}
+              {result?.studentName || user?.displayName || 'Stagiaire'}
             </p>
             <p className="text-[10px] md:text-xs text-slate-400 uppercase tracking-widest">
-              Identifiant Stagiaire : <strong className="text-slate-700 font-bold">{user.registrationNumber || user.email || 'N/A'}</strong>
-              {user.groupName && <span> • Groupe : <strong className="text-slate-700 font-bold">{user.groupName}</strong></span>}
-              {user.filiere && <span> • Filière : <strong className="text-slate-700 font-bold">{user.filiere}</strong></span>}
+              Identifiant Stagiaire : <strong className="text-slate-700 font-bold">{user?.registrationNumber || user?.email || result?.studentEmail || 'N/A'}</strong>
+              {(result?.groupName || user?.groupName) && <span> • Groupe : <strong className="text-slate-700 font-bold">{result?.groupName || user?.groupName}</strong></span>}
+              {(result?.filiere || user?.filiere) && <span> • Filière : <strong className="text-slate-700 font-bold">{result?.filiere || user?.filiere}</strong></span>}
             </p>
           </div>
 
           <p className="text-xs md:text-sm text-slate-500 font-serif leading-relaxed px-6">
-            A passé avec succès l'examen académique correspondant au module d'enseignement :
+            A validé avec succès l'évaluation académique pour le module d'enseignement :
           </p>
 
-          <div className="bg-indigo-50/40 border border-slate-100 rounded-xl p-3 md:p-4 inline-block w-full max-w-2xl">
-            <h4 className="text-sm md:text-base font-black text-indigo-900 uppercase">
-              {exam.title}
-            </h4>
-            <p className="text-[10px] md:text-xs text-slate-500 font-bold mt-1">
-              Module : {moduleName || "Module Académique Spécialisé"}
+          <div 
+            className="rounded-2xl p-6 inline-block w-full max-w-2xl text-center shadow-lg my-3 border-2" 
+            style={{ 
+              backgroundColor: '#f8fafc', 
+              borderColor: '#d97706', // Rich amber color for high-fidelity highlighted border
+              borderStyle: 'solid',
+            }}
+          >
+            <p className="text-[11px] md:text-xs text-amber-600 font-extrabold uppercase tracking-[0.25em] mb-2" style={{ color: '#d97706' }}>
+              MODULE D'ENSEIGNEMENT : {moduleName || exam?.moduleName || "Spécialisé"}
             </p>
+            <div className="w-28 h-0.5 bg-amber-500 mx-auto mb-3" style={{ backgroundColor: '#f1f5f9' }} />
+            <h3 className="text-xl md:text-2xl text-indigo-950 uppercase tracking-wider leading-tight px-6 font-sans" style={{ fontWeight: 900, color: '#1e1b4b' }}>
+              {exam.title}
+            </h3>
+            <div className="mt-4 text-[10px] text-slate-400 font-black tracking-widest uppercase" style={{ color: '#94a3b8' }}>
+              • Épreuve de Certification Officielle •
+            </div>
           </div>
 
           <p className="text-xs md:text-sm text-slate-600 font-serif leading-relaxed px-6">
             {isPassed ? (
               <span>
-                Ayant validé les connaissances théoriques et pratiques nécessaires avec un score de{' '}
-                <strong className="text-indigo-900 font-black font-sans">{percentage}%</strong> ({result.score}/{result.totalPoints} points) avec la mention :{' '}
+                Ayant validé les connaissances théoriques et pratiques nécessaires de ce module avec un score de{' '}
+                <strong className="text-indigo-900 font-black font-sans">{percentage}%</strong> ({result?.score || 0}/{result?.totalPoints || 0} points) avec la mention :{' '}
                 <strong className="text-emerald-700 font-black uppercase font-sans tracking-wide bg-emerald-50 px-2.5 py-0.5 rounded-md border border-emerald-100">{appreciation}</strong>.
               </span>
             ) : (
               <span>
-                A complété l'épreuve d'évaluation de fin de module avec un score de{' '}
-                <strong className="text-indigo-900 font-black font-sans">{percentage}%</strong> ({result.score}/{result.totalPoints} points).
+                A complété l'épreuve d'évaluation correspondante avec un score de{' '}
+                <strong className="text-indigo-900 font-black font-sans">{percentage}%</strong> ({result?.score || 0}/{result?.totalPoints || 0} points).
               </span>
             )}
           </p>

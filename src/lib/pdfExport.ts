@@ -290,7 +290,7 @@ const patchWindowGetComputedStyle = (win: any): (() => void) => {
               }
             }
           }
-          const val = Reflect.get(target, prop, receiver);
+          const val = Reflect.get(target, prop);
           if (typeof val === 'function') {
             return val.bind(target);
           }

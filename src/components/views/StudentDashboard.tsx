@@ -36,6 +36,14 @@ export const StudentDashboard = ({ exams, results, onStartExam, user, modules, n
   const [layoutMode, setLayoutMode] = useState<'grid' | 'list'>('grid');
   const [selectedResult, setSelectedResult] = useState<{ exam: Exam, result: Result } | null>(null);
 
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(6);
+
+  // Reset page when sorting/filtering/searching changes
+  React.useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, selectedModuleId, statusFilter, typeFilter, sortBy]);
+
   // Computed status counts for the selected module and search query context
   const statusCounts = useMemo(() => {
     let all = 0;
@@ -74,8 +82,8 @@ export const StudentDashboard = ({ exams, results, onStartExam, user, modules, n
   const examsWithStatus = useMemo(() => {
     return exams
       .filter(e => {
-        const matchesSearch = e.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
-          modules.find(m => m.id === e.moduleId)?.name.toLowerCase().includes(searchQuery.toLowerCase());
+        const matchesSearch = (e.title || '').toLowerCase().includes(searchQuery.toLowerCase()) || 
+          (modules.find(m => m.id === e.moduleId)?.name || '').toLowerCase().includes(searchQuery.toLowerCase());
         const matchesModule = selectedModuleId === null || e.moduleId === selectedModuleId;
         const hasTaken = results.some(r => r.examId === e.id);
         const matchesStatus = statusFilter === 'all' || 
@@ -96,6 +104,12 @@ export const StudentDashboard = ({ exams, results, onStartExam, user, modules, n
         return a.title.localeCompare(b.title);
       });
   }, [exams, results, searchQuery, modules, sortBy, selectedModuleId, statusFilter, typeFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(examsWithStatus.length / itemsPerPage));
+  const paginatedExams = useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    return examsWithStatus.slice(startIndex, startIndex + itemsPerPage);
+  }, [examsWithStatus, currentPage, itemsPerPage]);
 
   const stats = useMemo(() => {
     const totalTaken = results.length;
@@ -230,10 +244,10 @@ export const StudentDashboard = ({ exams, results, onStartExam, user, modules, n
       }));
     if (pending.length === 0) return null;
 
-    // EFM (fin de module) takes absolute priority over controls continus, then recency
+    // Ongoing exam session (started but not finished) has absolute top priority, then fin-de-module, then recency
     return pending.sort((a, b) => {
-      const priorityA = a.type === 'fin-de-module' ? 2 : 1;
-      const priorityB = b.type === 'fin-de-module' ? 2 : 1;
+      const priorityA = a.sessionStartTime ? 3 : (a.type === 'fin-de-module' ? 2 : 1);
+      const priorityB = b.sessionStartTime ? 3 : (b.type === 'fin-de-module' ? 2 : 1);
       if (priorityA !== priorityB) {
         return priorityB - priorityA;
       }
@@ -381,9 +395,14 @@ export const StudentDashboard = ({ exams, results, onStartExam, user, modules, n
                 <Button
                   onClick={() => onStartExam(mostUrgentExam)}
                   size="lg"
-                  className="w-full lg:w-auto h-16 px-8 rounded-2xl bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white font-black text-xs uppercase tracking-[0.2em] shadow-lg shadow-indigo-600/30 border border-indigo-400/30 hover:scale-[1.03] transition-all flex items-center justify-center gap-2 group cursor-pointer"
+                  className={cn(
+                    "w-full lg:w-auto h-16 px-8 rounded-2xl text-white font-black text-xs uppercase tracking-[0.2em] shadow-lg border hover:scale-[1.03] transition-all flex items-center justify-center gap-2 group cursor-pointer",
+                    mostUrgentExam.sessionStartTime 
+                      ? "bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 shadow-amber-500/20 border-amber-400 animate-pulse"
+                      : "bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 shadow-indigo-600/30 border-indigo-400/30"
+                  )}
                 >
-                  Démarrer l'épreuve maintenant 
+                  {mostUrgentExam.sessionStartTime ? "Reprendre l'épreuve en cours" : "Démarrer l'épreuve maintenant"} 
                   <ArrowRight className="w-4 h-4 group-hover:translate-x-1.5 transition-transform" />
                 </Button>
               </div>
@@ -659,7 +678,7 @@ export const StudentDashboard = ({ exams, results, onStartExam, user, modules, n
             ) : layoutMode === 'list' ? (
               /* Sleek Streamlined List View Layout */
               <div className="flex flex-col gap-4">
-                {examsWithStatus.map((exam, index) => {
+                {paginatedExams.map((exam, index) => {
                   const totalPoints = getExamTotalPoints(exam);
                   const examResult = results.find(r => r.examId === exam.id);
                   return (
@@ -755,7 +774,7 @@ export const StudentDashboard = ({ exams, results, onStartExam, user, modules, n
             ) : (
               /* Original Highly Visual Grid Layout */
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                {examsWithStatus.map((exam, index) => {
+                {paginatedExams.map((exam, index) => {
                   const totalPoints = getExamTotalPoints(exam);
                   const examResult = results.find(r => r.examId === exam.id);
                   return (
@@ -775,7 +794,7 @@ export const StudentDashboard = ({ exams, results, onStartExam, user, modules, n
                               </span>
                             )}
                             <span className="text-[10px] font-black bg-indigo-50 text-indigo-600 px-2.5 py-1 rounded-lg uppercase tracking-wider">
-                              {modules.find(m => m.id === exam.moduleId)?.name || 'Module inconnu'}
+                              {exam.moduleName || modules.find(m => m.id === exam.moduleId)?.name || 'Module inconnu'}
                             </span>
                             <span className="text-[10px] font-black text-amber-600 flex items-center gap-1 uppercase tracking-widest bg-amber-50 px-2 py-1 rounded-lg group-hover:scale-110 transition-transform">
                               <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" /> {totalPoints} PTS
@@ -830,8 +849,17 @@ export const StudentDashboard = ({ exams, results, onStartExam, user, modules, n
                               )}
                             </div>
                           ) : (
-                            <Button onClick={() => onStartExam(exam)} className="w-full h-14 rounded-2xl text-xs uppercase tracking-[0.2em] font-black mt-auto group-hover:shadow-xl group-hover:shadow-indigo-100">
-                              Commencer <ArrowRight className="w-4 h-4 ml-1 group-hover:translate-x-1 transition-transform" />
+                            <Button 
+                              onClick={() => onStartExam(exam)} 
+                              className={cn(
+                                "w-full h-14 rounded-2xl text-xs uppercase tracking-[0.2em] font-black mt-auto group-hover:shadow-xl flex items-center justify-center gap-2",
+                                exam.sessionStartTime 
+                                  ? "bg-amber-500 hover:bg-amber-600 text-white shadow-lg shadow-amber-500/10 group-hover:shadow-amber-500/30 animate-pulse border-2 border-amber-400"
+                                  : "bg-indigo-600 hover:bg-indigo-700 text-white group-hover:shadow-indigo-100"
+                              )}
+                            >
+                              {exam.sessionStartTime ? "Reprendre" : "Commencer"}
+                              <ArrowRight className="w-4 h-4 ml-1 group-hover:translate-x-1 transition-transform" />
                             </Button>
                           )}
                         </div>
@@ -839,6 +867,54 @@ export const StudentDashboard = ({ exams, results, onStartExam, user, modules, n
                     </motion.div>
                   );
                 })}
+              </div>
+            )}
+
+            {/* Exam Pagination Controls */}
+            {totalPages > 1 && (
+              <div className="p-5 bg-white border border-slate-100 rounded-[2rem] shadow-sm flex flex-col sm:flex-row items-center justify-between gap-4 mt-8">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-4 w-full sm:w-auto">
+                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.15em] text-center sm:text-left">
+                    Affichage {examsWithStatus.length > 0 ? (currentPage - 1) * itemsPerPage + 1 : 0} à {Math.min(currentPage * itemsPerPage, examsWithStatus.length)} sur {examsWithStatus.length} épreuves
+                  </span>
+                  <select
+                    value={itemsPerPage}
+                    onChange={(e) => {
+                      setItemsPerPage(Number(e.target.value));
+                      setCurrentPage(1);
+                    }}
+                    className="text-[10px] font-black uppercase tracking-widest bg-slate-50 border-2 border-transparent focus:border-indigo-500/20 rounded-xl px-2.5 py-1.5 text-slate-500 focus:outline-none cursor-pointer hover:border-slate-300 transition-all w-full sm:w-auto text-center"
+                  >
+                    <option value={4}>4 par page</option>
+                    <option value={6}>6 par page</option>
+                    <option value={10}>10 par page</option>
+                    <option value={20}>20 par page</option>
+                  </select>
+                </div>
+                
+                <div className="flex items-center justify-center gap-2 w-full sm:w-auto">
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    disabled={currentPage === 1}
+                    onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                    className="h-8 px-4 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all border-slate-200 text-slate-500 hover:text-indigo-600 bg-white"
+                  >
+                    Précédent
+                  </Button>
+                  <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest px-2 min-w-[100px] text-center">
+                    Page {currentPage} sur {totalPages}
+                  </span>
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    disabled={currentPage === totalPages}
+                    onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                    className="h-8 px-4 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all border-slate-200 text-slate-500 hover:text-indigo-600 bg-white"
+                  >
+                    Suivant
+                  </Button>
+                </div>
               </div>
             )}
           </section>
