@@ -24,6 +24,8 @@ interface LiveStudentSession {
   extraTimeMinutes?: number;
   timeLeft?: number;
   cheatAlerts?: Array<{ type: string; details: string; timestamp: number }>;
+  hasPendingDecision?: boolean;
+  pendingDecisionTime?: number;
 }
 
 interface CheatAlertLog {
@@ -146,6 +148,11 @@ export const LiveSupervisionModal: React.FC<LiveSupervisionModalProps> = ({ exam
     );
   }, [sessions, searchQuery]);
 
+  // Find sessions where the student had a tab exit and requires authorization to proceed
+  const pendingSessions = useMemo(() => {
+    return sessions.filter(s => s.hasPendingDecision && s.status === 'active');
+  }, [sessions]);
+
   // Format date/time
   const formatTime = (ts: number) => {
     const d = new Date(ts);
@@ -242,6 +249,49 @@ export const LiveSupervisionModal: React.FC<LiveSupervisionModalProps> = ({ exam
               </Button>
             </div>
           </div>
+
+          {/* Section Incidents / Décisions en attente */}
+          {pendingSessions.length > 0 && (
+            <div className="bg-rose-50/50 border border-rose-100 p-4 rounded-2xl space-y-3 shadow-sm shrink-0">
+              <h4 className="text-[10px] font-black uppercase text-rose-800 tracking-wider flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-rose-600 animate-bounce" /> {pendingSessions.length} incident{pendingSessions.length > 1 ? 's' : ''} de sortie d'onglet en attente de décision
+              </h4>
+              <div className="divide-y divide-rose-100/50 block">
+                {pendingSessions.map(ps => (
+                  <div key={ps.studentId} className="py-3 first:pt-0 last:pb-0 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div>
+                      <span className="text-xs font-black text-rose-900 uppercase tracking-tight block">{ps.studentName}</span>
+                      <span className="text-[10px] text-rose-700/80 font-bold block">Matricule: {ps.registrationNumber} • {ps.tabExitCount} sortie(s) d'onglet</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (confirm(`Voulez-vous bloquer et forcer la soumission de l'examen de ${ps.studentName} ?`)) {
+                            socket.emit('exam:remote-action', { examId: exam.id, studentId: ps.studentId, action: 'stop' });
+                          }
+                        }}
+                        className="bg-rose-600 hover:bg-rose-700 text-white font-black text-[9px] uppercase tracking-wider h-8 rounded-xl flex items-center gap-1.5 px-3 whitespace-nowrap shadow-sm shadow-rose-600/10"
+                      >
+                        <ShieldAlert className="w-3.5 h-3.5" /> Bloquer
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          socket.emit('exam:remote-action', { examId: exam.id, studentId: ps.studentId, action: 'allow' });
+                        }}
+                        className="bg-emerald-500 hover:bg-emerald-600 text-white font-black text-[9px] uppercase tracking-wider h-8 rounded-xl flex items-center gap-1.5 px-3 whitespace-nowrap shadow-sm shadow-emerald-500/10"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" /> Autoriser à continuer
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Student session list (with expansions) */}
           <div className="flex-1 overflow-y-auto bg-white border border-slate-100 rounded-2xl shadow-sm pr-1">
@@ -372,6 +422,44 @@ export const LiveSupervisionModal: React.FC<LiveSupervisionModalProps> = ({ exam
                                       </span>
                                     </div>
                                   ))}
+                                </div>
+                              )}
+
+                              {session.hasPendingDecision && (
+                                <div className="bg-rose-50 border-2 border-rose-200 p-4 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4 animate-pulse mt-2">
+                                  <div className="flex items-center gap-3">
+                                    <AlertTriangle className="w-6 h-6 text-rose-600 shrink-0" />
+                                    <div>
+                                      <p className="text-xs font-black text-rose-800 uppercase tracking-wider">Sortie d'onglet détectée !</p>
+                                      <p className="text-xs text-rose-700 font-semibold leading-relaxed">
+                                        L'élève a quitté la page de l'examen. Souhaitez-vous le bloquer pour tricherie ou l'autoriser à poursuivre ?
+                                      </p>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
+                                    <Button
+                                      size="sm"
+                                      className="w-full sm:w-auto bg-rose-600 hover:bg-rose-700 text-white font-black text-[10px] uppercase tracking-wider h-9 rounded-xl flex items-center justify-center gap-1.5 px-3 whitespace-nowrap shadow-sm shadow-rose-600/10"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        if (confirm(`Voulez-vous bloquer et forcer la soumission de l'examen de ${session.studentName} ?`)) {
+                                          socket.emit('exam:remote-action', { examId: exam.id, studentId: session.studentId, action: 'stop' });
+                                        }
+                                      }}
+                                    >
+                                      <ShieldAlert className="w-3.5 h-3.5" /> Bloquer l'élève
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      className="w-full sm:w-auto bg-emerald-500 hover:bg-emerald-600 text-white font-black text-[10px] uppercase tracking-wider h-9 rounded-xl flex items-center justify-center gap-1.5 px-3 whitespace-nowrap shadow-sm shadow-emerald-500/10"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        socket.emit('exam:remote-action', { examId: exam.id, studentId: session.studentId, action: 'allow' });
+                                      }}
+                                    >
+                                      <CheckCircle2 className="w-3.5 h-3.5" /> Autoriser à continuer
+                                    </Button>
+                                  </div>
                                 </div>
                               )}
 

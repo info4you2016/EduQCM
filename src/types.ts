@@ -252,6 +252,8 @@ export interface LiveStudentSession {
   extraTimeMinutes?: number;
   timeLeft?: number;
   cheatAlerts?: Array<{ type: string; details: string; timestamp: number }>;
+  hasPendingDecision?: boolean;
+  pendingDecisionTime?: number;
 }
 
 export interface CheatAlertLog {

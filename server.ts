@@ -1060,6 +1060,8 @@ async function startServer() {
       session.cheatAlerts.push({ type, details, timestamp });
       if (type === 'tab-exit') {
         session.tabExitCount += 1;
+        session.hasPendingDecision = true;
+        session.pendingDecisionTime = timestamp;
       }
 
       // Broadcast update to teachers
@@ -1079,7 +1081,7 @@ async function startServer() {
     });
 
     // Handle Teacher Remote actions
-    socket.on("exam:remote-action", (data: { examId: number; studentId: number; action: 'stop' | 'add-time'; amount?: number }) => {
+    socket.on("exam:remote-action", (data: { examId: number; studentId: number; action: 'stop' | 'add-time' | 'allow'; amount?: number }) => {
       const { examId, studentId, action, amount } = data;
       if (!examId || !studentId) return;
 
@@ -1089,6 +1091,9 @@ async function startServer() {
           liveSessions[examId][studentId].extraTimeMinutes = (liveSessions[examId][studentId].extraTimeMinutes || 0) + (amount || 10);
         } else if (action === 'stop') {
           liveSessions[examId][studentId].status = 'completed';
+          liveSessions[examId][studentId].hasPendingDecision = false;
+        } else if (action === 'allow') {
+          liveSessions[examId][studentId].hasPendingDecision = false;
         }
         
         // Broadcast state update back to teachers

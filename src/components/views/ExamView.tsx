@@ -680,8 +680,6 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
     initAndRestoreState();
   }, [exam.id, user.id]);
 
-  const MAX_TAB_EXITS = 3;
-
   const enterFullscreen = async (): Promise<boolean> => {
     try {
       const isFsEnabled = typeof document !== 'undefined' && !!(
@@ -786,7 +784,7 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
 
           const exactTime = new Date().toLocaleTimeString('fr-FR');
           const type = 'fullscreen-exit';
-          const details = `Sortie du mode Plein Écran à ${exactTime} (Tentative: ${nextCount})`;
+          const details = "Sortie d'écran (Alt+Tab ou réduction)";
           
           logCheatAlert(type, details);
           // Emit cheating alert
@@ -1243,17 +1241,8 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
         setTabExitCount(prev => {
           const nextCount = prev + 1;
           localStorage.setItem(`exam_tab_exits_${exam.id}_${user.id}`, nextCount.toString());
-          const exactTime = new Date().toLocaleTimeString('fr-FR');
-          triggerCheatAlert('tab-exit', `Sortie d'écran / Changement d'onglet à ${exactTime} (Tentative: ${nextCount}/${MAX_TAB_EXITS})`);
-          
-          if (nextCount >= MAX_TAB_EXITS) {
-            // Auto submit to penalize web searches
-            setTimeout(() => {
-              handleSubmit(true, true);
-            }, 100);
-          } else {
-            setShowTabExitWarningModal(true);
-          }
+          triggerCheatAlert('tab-exit', "Sortie d'écran (Alt+Tab ou réduction)");
+          setShowTabExitWarningModal(true);
           return nextCount;
         });
       } else if (document.visibilityState === 'visible') {
@@ -1273,9 +1262,9 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
     };
   }, [hasStarted, showCompletion, isSubmitting, exam.id, user.id, user.displayName, user.registrationNumber, handleSubmit, exam.disableCopyPaste]);
 
-  // Écouter les commandes distantes d'un enseignant (arrêt forcé, rallonge de temps)
+  // Écouter les commandes distantes d'un enseignant (arrêt forcé, rallonge de temps, autorisation)
   useEffect(() => {
-    const handleRemoteTrigger = (data: { examId: number; action: 'stop' | 'add-time'; amount?: number }) => {
+    const handleRemoteTrigger = (data: { examId: number; action: 'stop' | 'add-time' | 'allow'; amount?: number }) => {
       if (data.examId !== exam.id) return;
       
       if (data.action === 'stop') {
@@ -1288,6 +1277,11 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
           localStorage.setItem(`exam_extra_time_${exam.id}_${user.id}`, next.toString());
           return next;
         });
+      } else if (data.action === 'allow') {
+        toast.success("Votre enseignant a validé votre explication. Vous êtes autorisé à continuer l'examen !", {
+          duration: 6000
+        });
+        setShowTabExitWarningModal(false);
       }
     };
 
@@ -1778,16 +1772,16 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
                 <div>
                   <p className="text-lg font-black uppercase tracking-tight">Activité Suspecte</p>
                   <p className="text-sm font-medium opacity-90 font-bold text-rose-600">
-                    Tentative d'abandon de focus ({tabExitCount}/{MAX_TAB_EXITS}).
+                    Sortie d'écran détectée ({tabExitCount} fois).
                   </p>
                 </div>
               </div>
               <div className="space-y-4 text-sm text-slate-500 font-medium leading-relaxed">
                 <p>
-                  Le changement d'onglet ou d'application est strictement surveillé pour éviter les recherches Web non autorisées ou les tricheries.
+                  Le changement d'onglet ou d'application durant un examen surveillés est formellement interdit et fait l'objet d'un rapport automatique en temps réel.
                 </p>
-                <p className="font-bold text-rose-500 bg-rose-50 border border-rose-100 p-3 rounded-2xl">
-                  Attention : En cas de {MAX_TAB_EXITS} alertes d'abandon d'onglet, votre examen sera AUTOMATIQUEMENT SOUMIS avec vos réponses actuelles et clôturé définitivement.
+                <p className="font-bold text-rose-600 bg-rose-50 border border-rose-100 p-4 rounded-2xl">
+                  ⚠️ Votre enseignant a été alerté en temps réel de cette interruption. Il décidera s'il convient de vous autoriser à poursuivre l'épreuve ou de bloquer définitivement votre copie. Vous pouvez toutefois continuer à composer en attendant sa décision.
                 </p>
               </div>
               <div className="pt-4">
@@ -1797,7 +1791,7 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
                   }} 
                   className="w-full py-5 h-auto bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl text-sm font-black uppercase tracking-widest"
                 >
-                  Accepter & Continuer l'Examen
+                  Continuer l'Examen
                 </Button>
               </div>
             </div>
@@ -2424,10 +2418,10 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
             <motion.div 
                initial={{ opacity: 0, y: -20 }}
                animate={{ opacity: 1, y: 0 }}
-               className="mb-6 p-4 bg-rose-50 border border-rose-200 rounded-2xl flex items-center gap-3 text-rose-700"
+               className="mb-6 p-4 bg-rose-50 border border-rose-200 rounded-2xl flex items-center gap-3 text-rose-700 font-semibold"
             >
                <AlertCircle className="w-5 h-5 shrink-0" />
-               <p className="text-xs font-black uppercase tracking-tight">Attention : Changement d'onglet détecté ({tabExitCount}/{MAX_TAB_EXITS}). La copie sera automatiquement soumise après {MAX_TAB_EXITS} tentatives d'abandon.</p>
+               <p className="text-xs font-black uppercase tracking-tight text-rose-800">Section Surveillée : Sortie d'écran détectée ({tabExitCount} fois). Votre enseignant a été immédiatement averti en temps réel et doit décider d'autoriser ou d'interrompre votre examen.</p>
             </motion.div>
           )}
 
