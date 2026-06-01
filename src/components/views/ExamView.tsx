@@ -603,6 +603,7 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
   const [showFullscreenWarningModal, setShowFullscreenWarningModal] = useState(false);
   const [showTabExitWarningModal, setShowTabExitWarningModal] = useState(false);
   const [needsFullscreenRestore, setNeedsFullscreenRestore] = useState(() => {
+    if (!exam.disableCopyPaste) return false;
     const started = !!localStorage.getItem(`exam_start_${exam.id}_${user.id}`);
     if (!started) return false;
     
@@ -764,7 +765,7 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
 
   // Fullscreen Change Listener & Warnings
   useEffect(() => {
-    if (!hasStarted || showCompletion || isSubmitting || isFullscreenUnsupported) return;
+    if (!exam.disableCopyPaste || !hasStarted || showCompletion || isSubmitting || isFullscreenUnsupported) return;
 
     const handleFullscreenChange = () => {
       const isFull = !!(
@@ -843,7 +844,7 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
       document.removeEventListener('mozfullscreenchange', handleFullscreenChange);
       document.removeEventListener('MSFullscreenChange', handleFullscreenChange);
     };
-  }, [hasStarted, showCompletion, isSubmitting, exam.id, user.id, user.displayName, user.registrationNumber, isFullscreenUnsupported]);
+  }, [hasStarted, showCompletion, isSubmitting, exam.id, user.id, user.displayName, user.registrationNumber, isFullscreenUnsupported, exam.disableCopyPaste]);
 
   // Synchroniser la progression de l'étudiant via Socket.io
   useEffect(() => {
@@ -905,7 +906,7 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
 
   // Anti Copy-Paste, Selection & Keyboard Shortcut Blocking Logic (Rigorous Security Platform)
   useEffect(() => {
-    if (!hasStarted || showCompletion || isSubmitting) return;
+    if (!exam.disableCopyPaste || !hasStarted || showCompletion || isSubmitting) return;
 
     const preventAction = (e: Event) => {
       e.preventDefault();
@@ -1012,7 +1013,7 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
       (document.body.style as any).msUserSelect = previousMsUserSelect;
       (document.body.style as any).mozUserSelect = previousMozUserSelect;
     };
-  }, [hasStarted, showCompletion, isSubmitting, exam.id, user.id, user.displayName, user.registrationNumber]);
+  }, [hasStarted, showCompletion, isSubmitting, exam.id, user.id, user.displayName, user.registrationNumber, exam.disableCopyPaste]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -1218,7 +1219,7 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
 
   // Tab Visibility Monitoring & Blur Cheat Detection
   useEffect(() => {
-    if (!hasStarted || showCompletion || isSubmitting) return;
+    if (!exam.disableCopyPaste || !hasStarted || showCompletion || isSubmitting) return;
 
     const triggerCheatAlert = (type: string, details: string) => {
       logCheatAlert(type, details);
@@ -1292,7 +1293,7 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
       window.removeEventListener('blur', handleBlur);
       window.removeEventListener('focus', handleFocus);
     };
-  }, [hasStarted, showCompletion, isSubmitting, exam.id, user.id, user.displayName, user.registrationNumber, handleSubmit]);
+  }, [hasStarted, showCompletion, isSubmitting, exam.id, user.id, user.displayName, user.registrationNumber, handleSubmit, exam.disableCopyPaste]);
 
   // Écouter les commandes distantes d'un enseignant (arrêt forcé, rallonge de temps)
   useEffect(() => {
@@ -1383,10 +1384,12 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
     const now = Date.now();
     localStorage.setItem(`exam_start_${exam.id}_${user.id}`, now.toString());
     setHasStarted(true);
-    const success = await enterFullscreen();
-    if (!success) {
-      setIsFullscreenUnsupported(true);
-      toast.error("Le mode plein écran n'a pas pu être activé. Vous pouvez passer l'examen dans cette fenêtre.");
+    if (exam.disableCopyPaste) {
+      const success = await enterFullscreen();
+      if (!success) {
+        setIsFullscreenUnsupported(true);
+        toast.error("Le mode plein écran n'a pas pu être activé. Vous pouvez passer l'examen dans cette fenêtre.");
+      }
     }
     // Immediate eager sync
     setTimeout(() => {

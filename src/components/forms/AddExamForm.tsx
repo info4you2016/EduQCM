@@ -893,25 +893,82 @@ export const AddExamForm = ({ modules, onComplete, user, initialData }: AddExamF
               />
             </div>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="space-y-4">
             <label className="flex items-center gap-3 p-4 bg-slate-50 rounded-2xl cursor-pointer border-2 border-transparent hover:border-indigo-100 transition-all">
               <input type="checkbox" checked={shuffleQuestions} onChange={(e) => setShuffleQuestions(e.target.checked)} className="w-5 h-5 text-indigo-600 rounded-lg border-2 border-slate-300 focus:ring-indigo-500" />
               <div className="flex flex-col">
                 <span className="text-sm font-bold text-slate-700 flex items-center gap-2">
                   <Shuffle className="w-4 h-4 text-indigo-500" /> Mélanger les questions
                 </span>
-                <span className="text-[10px] text-slate-400 font-medium">L'ordre sera différent pour chaque étudiant</span>
+                <span className="text-[10px] text-slate-400 font-medium">L'ordre des questions sera différent pour chaque étudiant</span>
               </div>
             </label>
-            <label className="flex items-center gap-3 p-4 bg-slate-50 rounded-2xl cursor-pointer border-2 border-transparent hover:border-rose-100 transition-all">
-              <input type="checkbox" checked={disableCopyPaste} onChange={(e) => setDisableCopyPaste(e.target.checked)} className="w-5 h-5 text-rose-600 rounded-lg border-2 border-slate-300 focus:ring-rose-500" />
-              <div className="flex flex-col">
-                <span className="text-sm font-bold text-slate-700 flex items-center gap-2">
-                  <ShieldAlert className="w-4 h-4 text-rose-500" /> Verrouillage de l'appareil ("Safe Exam Browser Mode")
-                </span>
-                <span className="text-[10px] text-slate-400 font-medium">Plein écran obligatoire, blocage du copier-coller, alertes d'abandon d'onglet et fermeture automatique</span>
+
+            <div className="space-y-3">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1 flex items-center gap-1.5">
+                <ShieldAlert className="w-3.5 h-3.5 text-slate-400" /> Mode de sécurité de l'examen (Facultatif)
+              </label>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Mode Standard */}
+                <button
+                  type="button"
+                  onClick={() => setDisableCopyPaste(false)}
+                  className={`flex items-start gap-4 p-4 rounded-2xl border-2 text-left transition-all ${
+                    !disableCopyPaste
+                      ? 'border-indigo-500 bg-indigo-50/20 shadow-sm'
+                      : 'border-slate-100 bg-slate-50/50 hover:border-slate-200'
+                  }`}
+                >
+                  <div className={`w-5 h-5 mt-0.5 rounded-full border-2 flex items-center justify-center transition-all ${
+                    !disableCopyPaste ? 'border-indigo-600 bg-indigo-600' : 'border-slate-300 bg-white'
+                  }`}>
+                    {!disableCopyPaste && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                  </div>
+                  <div className="flex-1 space-y-1">
+                    <span className="text-sm font-bold text-slate-700 block">Mode Standard</span>
+                    <p className="text-xs text-slate-500 leading-relaxed font-semibold">
+                      Aucune contrainte sur l'étudiant. Idéal pour les examens blancs, évaluations libres ou devoirs à la maison.
+                    </p>
+                    <ul className="text-[10px] text-slate-400 list-disc list-inside space-y-1 mt-2 font-medium">
+                      <li>Copier-coller & clic droit autorisés</li>
+                      <li>Fenêtre standard ou plein écran libre</li>
+                      <li>Pas d'exclusion ni de blocage d'onglets</li>
+                    </ul>
+                  </div>
+                </button>
+
+                {/* Mode Sécurisé (SEB) */}
+                <button
+                  type="button"
+                  onClick={() => setDisableCopyPaste(true)}
+                  className={`flex items-start gap-4 p-4 rounded-2xl border-2 text-left transition-all ${
+                    disableCopyPaste
+                      ? 'border-rose-500 bg-rose-50/20 shadow-sm'
+                      : 'border-slate-100 bg-slate-50/50 hover:border-slate-200'
+                  }`}
+                >
+                  <div className={`w-5 h-5 mt-0.5 rounded-full border-2 flex items-center justify-center transition-all ${
+                    disableCopyPaste ? 'border-rose-600 bg-rose-600' : 'border-slate-300 bg-white'
+                  }`}>
+                    {disableCopyPaste && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                  </div>
+                  <div className="flex-1 space-y-1">
+                    <span className="text-sm font-bold text-slate-700 flex items-center gap-1.5">
+                      Mode Sécurisé (SEB / Lockdown)
+                    </span>
+                    <p className="text-xs text-slate-500 leading-relaxed font-semibold">
+                      Mesures de surveillance renforcées pour verrouiller l'examen et certifier les résultats.
+                    </p>
+                    <ul className="text-[10px] text-rose-600 list-disc list-inside space-y-1 mt-2 font-semibold">
+                      <li>Copier-coller et sélection de texte désactivés</li>
+                      <li>Plein écran strict obligatoire pour continuer</li>
+                      <li>Soumission automatique après 3 sorties d'onglet</li>
+                      <li>Rapports d'incident envoyés en temps réel</li>
+                    </ul>
+                  </div>
+                </button>
               </div>
-            </label>
+            </div>
           </div>
 
           <div className="space-y-4">
