@@ -30,6 +30,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { api } from '../../lib/api';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
+import { toast } from 'react-hot-toast';
 
 interface DiagnosticData {
   integrity: string;
@@ -256,9 +257,10 @@ export const DatabaseManagement = () => {
       };
       const updated = await api.settings.update(payload);
       setSettings(updated);
-    } catch (error) {
+      toast.success("Paramètres sauvegardés avec succès !");
+    } catch (error: any) {
       console.error("Failed to update settings:", error);
-      alert("Échec de la sauvegarde des paramètres.");
+      toast.error(error?.message || "Échec de la sauvegarde des paramètres.");
     } finally {
       setSavingSettings(false);
     }
@@ -313,9 +315,10 @@ export const DatabaseManagement = () => {
       // Refresh list
       const backups = await api.admin.getAutoBackups();
       setAutoBackups(backups);
-    } catch (error) {
+      toast.success("Sauvegarde supprimée avec succès.");
+    } catch (error: any) {
       console.error("Failed to delete auto backup:", error);
-      alert("Échec de la suppression.");
+      toast.error(error?.message || "Échec de la suppression.");
     }
   };
 

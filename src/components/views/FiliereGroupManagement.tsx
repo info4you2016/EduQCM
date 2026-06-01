@@ -10,6 +10,7 @@ import { Input } from '../ui/Input';
 import { Modal } from '../ui/Modal';
 import { EmptyState } from '../ui/EmptyState';
 import { BulkImportStudents } from '../sections/BulkImportStudents';
+import { toast } from 'react-hot-toast';
 
 export const StudentListModal = React.memo(({ group, onClose }: { group: Group; onClose: () => void }) => {
   const [students, setStudents] = useState<any[]>([]);
@@ -108,12 +109,14 @@ export const FiliereForm = ({ initialData, onComplete }: { initialData: Filiere 
     try {
       if (initialData) {
         await api.filieres.update(initialData.id, { code, name, description, niveau });
+        toast.success("Filière mise à jour avec succès");
       } else {
         await api.filieres.create({ code, name, description, niveau });
+        toast.success("Filière créée avec succès");
       }
       onComplete();
     } catch (err: any) {
-      alert(err.message);
+      toast.error(err.message || "Une erreur est survenue");
     } finally {
       setLoading(false);
     }
@@ -166,17 +169,19 @@ export const GroupForm = ({ filieres, initialData, onComplete }: { filieres: Fil
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!filiereId) return alert("Veuillez sélectionner une filière.");
+    if (!filiereId) return toast.error("Veuillez sélectionner une filière.");
     setLoading(true);
     try {
       if (initialData) {
         await api.groups.update(initialData.id, { name, filiereId });
+        toast.success("Groupe mis à jour avec succès");
       } else {
         await api.groups.create({ name, filiereId });
+        toast.success("Groupe créé avec succès");
       }
       onComplete();
     } catch (err: any) {
-      alert(err.message);
+      toast.error(err.message || "Une erreur est survenue");
     } finally {
       setLoading(false);
     }
@@ -255,9 +260,10 @@ export const FiliereGroupManagement = ({ filieres, groups, onRefresh, mode = 'al
     if (!confirm("Voulez-vous vraiment supprimer cette filière ?")) return;
     try {
       await api.filieres.delete(id);
+      toast.success("Filière supprimée avec succès");
       onRefresh();
     } catch (err: any) {
-      alert(err.message);
+      toast.error(err.message || "Impossible de supprimer la filière");
     }
   };
 
@@ -265,9 +271,10 @@ export const FiliereGroupManagement = ({ filieres, groups, onRefresh, mode = 'al
     if (!confirm("Voulez-vous vraiment supprimer ce groupe ?")) return;
     try {
       await api.groups.delete(id);
+      toast.success("Groupe supprimé avec succès");
       onRefresh();
     } catch (err: any) {
-      alert(err.message);
+      toast.error(err.message || "Impossible de supprimer le groupe");
     }
   };
 

@@ -23,6 +23,7 @@ import { ExamPreviewModal } from '../modals/ExamPreviewModal';
 import { LiveSupervisionModal } from '../modals/LiveSupervisionModal';
 import { FiliereGroupManagement } from './FiliereGroupManagement';
 import { DetailedNotificationCard } from '../DetailedNotificationCard';
+import { toast } from 'react-hot-toast';
 import { AdminUserManagement } from '../sections/AdminUserManagement';
 import { AuditLogsView } from '../sections/AuditLogsView';
 import { AiAssistantView } from './AiAssistantView';
@@ -371,7 +372,7 @@ export const TeacherDashboard = ({
     const module = modules.find(m => m.id === exam.moduleId);
     const examResults = results.filter(r => r.examId === exam.id);
     if (!module || examResults.length === 0) {
-      alert("Aucun résultat à exporter ou module introuvable.");
+      toast.error("Aucun résultat à exporter ou module introuvable.");
       return;
     }
 
@@ -396,7 +397,7 @@ export const TeacherDashboard = ({
       );
     } catch (err) {
       console.error("PV Word Export failed:", err);
-      alert("Erreur lors de l'exportation du PV de fin de module au format Word.");
+      toast.error("Erreur lors de l'exportation du PV de fin de module au format Word.");
     } finally {
       setIsExportingPV(false);
     }
@@ -406,7 +407,7 @@ export const TeacherDashboard = ({
     const module = modules.find(m => m.id === exam.moduleId);
     const examResults = results.filter(r => r.examId === exam.id);
     if (!module || examResults.length === 0) {
-      alert("Aucun résultat à exporter ou module introuvable.");
+      toast.error("Aucun résultat à exporter ou module introuvable.");
       return;
     }
 
@@ -435,7 +436,7 @@ export const TeacherDashboard = ({
       );
     } catch (err) {
       console.error("Results PDF Export failed:", err);
-      alert("Erreur lors de l'exportation des résultats.");
+      toast.error("Erreur lors de l'exportation des résultats.");
     } finally {
       setResultsExportData(null);
       setIsExportingResults(false);
@@ -529,7 +530,7 @@ export const TeacherDashboard = ({
         );
       } catch (err) {
          console.error("Exam PDF Export failed:", err);
-         alert("Erreur lors de l'exportation PDF de l'examen.");
+         toast.error("Erreur lors de l'exportation PDF de l'examen.");
       } finally {
         setExportData(null);
         setIsExporting(false);
@@ -552,7 +553,7 @@ export const TeacherDashboard = ({
         );
       } catch (err) {
         console.error("Word Export failed:", err);
-        alert("Erreur lors de l'exportation Word.");
+        toast.error("Erreur lors de l'exportation Word.");
       }
     }
   };
@@ -597,7 +598,7 @@ export const TeacherDashboard = ({
       }
 
       if (students.length === 0) {
-        alert("Aucun étudiant trouvé pour ce module.");
+        toast.error("Aucun étudiant trouvé pour ce module.");
         setIsExporting(false);
         return;
       }
@@ -661,7 +662,7 @@ export const TeacherDashboard = ({
 
     } catch (err) {
       console.error("Excel Export Error:", err);
-      alert("Une erreur est survenue lors de l'exportation vers Excel.");
+      toast.error("Une erreur est survenue lors de l'exportation vers Excel.");
     } finally {
       setIsExporting(false);
     }
@@ -715,11 +716,11 @@ export const TeacherDashboard = ({
     try {
       await api.exams.delete(id);
       setDeletingExamId(null);
-      window.alert("Examen supprimé avec succès !");
+      toast.success("Examen supprimé avec succès !");
       onRefresh();
     } catch (error: any) {
       console.error("Error deleting exam:", error);
-      window.alert(error.message || "Erreur lors de la suppression de l'examen");
+      toast.error(error.message || "Erreur lors de la suppression de l'examen");
       setDeletingExamId(null);
     }
   };
@@ -740,11 +741,11 @@ export const TeacherDashboard = ({
           id: Math.random().toString(36).substr(2, 9)
         }))
       });
-      alert("Examen dupliqué avec succès !");
+      toast.success("Examen dupliqué avec succès !");
       onRefresh();
     } catch (error: any) {
       console.error("Error duplicating exam:", error);
-      alert(`Erreur: ${error.message || "Impossible de dupliquer l'examen"}`);
+      toast.error(`Erreur: ${error.message || "Impossible de dupliquer l'examen"}`);
     } finally {
       setDuplicatingExamId(null);
     }
@@ -755,7 +756,7 @@ export const TeacherDashboard = ({
       setTogglingExamId(exam.id);
       if (exam.status === 'active') {
         await api.exams.unpublish(exam.id);
-        alert("Examen désactivé !");
+        toast.success("Examen désactivé !");
       } else {
         setActivatingExam(exam);
         return; // handleActivateExam will handle the rest
@@ -763,7 +764,7 @@ export const TeacherDashboard = ({
       onRefresh();
     } catch (error: any) {
       console.error("Error toggling exam status:", error);
-      alert(`Erreur: ${error.message || "Action impossible"}`);
+      toast.error(`Erreur: ${error.message || "Action impossible"}`);
     } finally {
       setTogglingExamId(null);
     }
@@ -774,12 +775,12 @@ export const TeacherDashboard = ({
     try {
       setTogglingExamId(activatingExam.id);
       await api.exams.publish(activatingExam.id, groupId);
-      alert("Examen activé avec succès.");
+      toast.success("Examen activé avec succès.");
       setActivatingExam(null);
       onRefresh();
     } catch (error: any) {
       console.error("Error activating exam:", error);
-      alert(`Erreur: ${error.message || "Erreur lors de l'activation"}`);
+      toast.error(`Erreur: ${error.message || "Erreur lors de l'activation"}`);
     } finally {
       setTogglingExamId(null);
     }

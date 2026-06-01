@@ -20,6 +20,7 @@ import { ImportPreviewModal } from '../modals/ImportPreviewModal';
 import { ImportHelp } from '../sections/ImportHelp';
 import { Modal } from '../ui/Modal';
 import { AIQuestionGeneratorModal } from '../modals/AIQuestionGeneratorModal';
+import { toast } from 'react-hot-toast';
 
 interface AddExamFormProps {
   modules: Module[];
@@ -509,7 +510,7 @@ export const AddExamForm = ({ modules, onComplete, user, initialData }: AddExamF
       updateQuestion(q.id, result.question);
     } catch (err) {
       console.error("Variation failed:", err);
-      alert("La génération d'une variation a échoué.");
+      toast.error("La génération d'une variation a échoué.");
     } finally {
       setVariatingId(null);
     }
@@ -645,7 +646,7 @@ export const AddExamForm = ({ modules, onComplete, user, initialData }: AddExamF
       updateQuestion(q.id, { ...result.question, id: q.id });
     } catch (err) {
       console.error("Refinement failed:", err);
-      alert("L'amélioration IA a échoué.");
+      toast.error("L'amélioration IA a échoué.");
     } finally {
       setVariatingId(null);
     }
@@ -654,25 +655,28 @@ export const AddExamForm = ({ modules, onComplete, user, initialData }: AddExamF
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (initialData?.hasResults) {
-      alert("Impossible de modifier un examen qui a déjà des résultats.");
+      toast.error("Impossible de modifier un examen qui a déjà des résultats.");
       return;
     }
-    if (!moduleId) return alert("Veuillez sélectionner un module.");
+    if (!moduleId) {
+      toast.error("Veuillez sélectionner un module.");
+      return;
+    }
 
     const totalPoints = questions.reduce((sum, q) => sum + (q.points || 0), 0);
     const maxPoints = examType === 'controle-continu' ? 20 : 40;
     if (totalPoints !== maxPoints) {
-      alert(`Le total des points doit être exactement de ${maxPoints} pour un ${examType === 'controle-continu' ? 'Contrôle Continu' : 'Examen de Fin de Module'}. Actuellement: ${totalPoints}`);
+      toast.error(`Le total des points doit être exactement de ${maxPoints} pour un ${examType === 'controle-continu' ? 'Contrôle Continu' : 'Examen de Fin de Module'}. Actuellement: ${totalPoints}`);
       return;
     }
     
     for (let i = 0; i < questions.length; i++) {
-      const q = questions[i];
-      if (!q.text || q.text === '<p><br></p>') {
-        alert(`La question ${i + 1} n'a pas d'énoncé.`);
-        setCollapsedQuestions(prev => ({ ...prev, [q.id]: false }));
-        return;
-      }
+       const q = questions[i];
+       if (!q.text || q.text === '<p><br></p>') {
+         toast.error(`La question ${i + 1} n'a pas d'énoncé.`);
+         setCollapsedQuestions(prev => ({ ...prev, [q.id]: false }));
+         return;
+       }
     }
 
     setLoading(true);
@@ -1247,7 +1251,7 @@ export const AddExamForm = ({ modules, onComplete, user, initialData }: AddExamF
                                       }
                                     } catch (err) {
                                       console.error("Distractor generation failed:", err);
-                                      alert("La génération des distracteurs a échoué.");
+                                      toast.error("La génération des distracteurs a échoué.");
                                     } finally {
                                       setVariatingId(null);
                                     }
@@ -1468,7 +1472,7 @@ export const AddExamForm = ({ modules, onComplete, user, initialData }: AddExamF
                                       }
                                     } catch (err) {
                                       console.error("Pair generation failed:", err);
-                                      alert("La génération des paires a échoué.");
+                                      toast.error("La génération des paires a échoué.");
                                     } finally {
                                       setVariatingId(null);
                                     }

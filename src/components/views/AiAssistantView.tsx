@@ -17,6 +17,7 @@ import { Input } from '../ui/Input';
 import { Module, Question, Group, Filiere } from '../../types';
 import { api } from '../../lib/api';
 import { cn } from '../../lib/utils';
+import { toast } from 'react-hot-toast';
 
 interface AiAssistantViewProps {
   modules: Module[];
@@ -158,9 +159,9 @@ export const AiAssistantView = ({
           id: Math.random().toString(36).substr(2, 9)
         })) as any
       });
-    } catch (err) {
+    } catch (err: any) {
       console.error("AI Generation failed:", err);
-      alert("La génération d'examen a échoué. Veuillez réessayer.");
+      toast.error("La génération d'examen a échoué. Veuillez réessayer.");
     } finally {
       setIsGenerating(false);
     }
@@ -193,12 +194,12 @@ export const AiAssistantView = ({
         type: 'controle-continu',
         description: `Généré par l'Assistant IA pour le sujet: ${prompt} (${difficulty})`
       });
-      alert("Examen sauvegardé avec succès en tant que brouillon !");
+      toast.success("Examen sauvegardé avec succès en tant que brouillon !");
       onRefresh();
       onSelectTab('exams');
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to save exam:", err);
-      alert("Erreur lors de la sauvegarde de l'examen.");
+      toast.error("Erreur lors de la sauvegarde de l'examen.");
     } finally {
       setIsSaving(false);
     }
@@ -215,9 +216,9 @@ export const AiAssistantView = ({
     try {
       const result = await generateAnnouncementAI(announceTopic, announceAudienceText, announceTone);
       setGeneratedAnnounce(result);
-    } catch (err) {
+    } catch (err: any) {
       console.error("AI Announcement gen failed:", err);
-      alert("La génération d'annonce a échoué. Veuillez réessayer.");
+      toast.error("La génération d'annonce a échoué. Veuillez réessayer.");
     } finally {
       setIsGeneratingAnnounce(false);
     }
@@ -227,12 +228,12 @@ export const AiAssistantView = ({
     if (!generatedAnnounce) return;
     
     if (announceTargetType === 'group' && !selectedGroupId) {
-      alert("Veuillez choisir une classe cible.");
+      toast.error("Veuillez choisir une classe cible.");
       return;
     }
 
     if (announceTargetType === 'filiere' && !selectedFiliereId) {
-      alert("Veuillez choisir une filière cible.");
+      toast.error("Veuillez choisir une filière cible.");
       return;
     }
 
@@ -248,13 +249,13 @@ export const AiAssistantView = ({
         isPinned: announceIsPinned,
         importance: generatedAnnounce.importance || 'normal',
       });
-      alert("L'annonce générée par l'IA a été publiée avec succès !");
+      toast.success("L'annonce générée par l'IA a été publiée avec succès !");
       setGeneratedAnnounce(null);
       setAnnounceTopic('');
       onRefresh();
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to publish AI announcement:", err);
-      alert("Erreur lors de la publication.");
+      toast.error("Erreur lors de la publication.");
     } finally {
       setIsPublishingAnnounce(false);
     }
@@ -272,9 +273,9 @@ export const AiAssistantView = ({
       const module = modules.find(m => m.id === guideSelectedModuleId);
       const result = await generateStudyGuideAI(module?.name || 'Général', guideTopic);
       setGeneratedGuide(result);
-    } catch (err) {
+    } catch (err: any) {
       console.error("AI Guide gen failed:", err);
-      alert("La génération de la fiche synthétique a échoué.");
+      toast.error("La génération de la fiche synthétique a échoué.");
     } finally {
       setIsGeneratingGuide(false);
     }
@@ -291,9 +292,9 @@ export const AiAssistantView = ({
     try {
       const result = await generateRubricAI(rubricAssignment, rubricPoints);
       setGeneratedRubric(result);
-    } catch (err) {
+    } catch (err: any) {
       console.error("AI Rubric gen failed:", err);
-      alert("La génération de la grille d'évaluation a échoué.");
+      toast.error("La génération de la grille d'évaluation a échoué.");
     } finally {
       setIsGeneratingRubric(false);
     }

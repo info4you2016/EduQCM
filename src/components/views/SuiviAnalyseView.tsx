@@ -15,6 +15,7 @@ import { generateCohortReportAI } from '../../lib/gemini';
 import { cn } from '../../lib/utils';
 import Papa from 'papaparse';
 import { saveAs } from 'file-saver';
+import { toast } from 'react-hot-toast';
 
 interface SuiviAnalyseViewProps {
   modules: Module[];
@@ -204,9 +205,9 @@ export const SuiviAnalyseView = ({
       );
 
       setAiReport(report);
-    } catch (err) {
+    } catch (err: any) {
       console.error("AI Cohort Audit failed:", err);
-      alert("L'audit par l'IA a échoué. Veuillez réessayer.");
+      toast.error("L'audit par l'IA a échoué. Veuillez réessayer.");
     } finally {
       setIsAuditing(false);
     }
@@ -553,7 +554,7 @@ export const SuiviAnalyseView = ({
                     onClick={() => {
                       const text = `RAPPORT DE COHORTE : ${auditTarget}\n\nOVERVIEW:\n${aiReport.overview}\n\nSTRENGTHS:\n${aiReport.strengths.join('\n')}\n\nWEAKNESSES:\n${aiReport.weaknesses.join('\n')}\n\nREMEDIATIONS:\n${aiReport.remediations.join('\n')}\n\nCONCLUSION:\n${aiReport.conclusion}`;
                       navigator.clipboard.writeText(text);
-                      alert("Rapport copié dans le presse-papiers !");
+                      toast.success("Rapport copié dans le presse-papiers !");
                     }}
                     className="flex items-center gap-1.5 bg-slate-200/50 hover:bg-indigo-50 text-indigo-700 font-black text-[10px] px-3.5 py-2.5 rounded-xl uppercase tracking-wider transition-all"
                   >

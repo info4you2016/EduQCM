@@ -1032,15 +1032,8 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
   }, [currentQuestionIndex, hasStarted]);
 
   useEffect(() => {
-    if (!hasStarted || showCompletion || isSubmitting) return;
-
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      e.preventDefault();
-      e.returnValue = '';
-    };
-
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+    // Standard react-hot-toast notifications are used to notify users on-screen.
+    // Native beforeunload alerts have been removed as requested.
   }, [hasStarted, showCompletion, isSubmitting]);
 
   useEffect(() => {

@@ -6,6 +6,7 @@ import { Input } from '../ui/Input';
 import { RichTextEditor } from '../ui/RichTextEditor';
 import { Globe, Users, GraduationCap, ShieldAlert, BookOpen } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { toast } from 'react-hot-toast';
 
 interface AddNotificationFormProps {
   onComplete: () => void;
@@ -30,17 +31,17 @@ export const AddNotificationForm = ({ onComplete, user, groups, filieres = [] }:
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!content || content === '<p><br></p>') {
-      alert("Le contenu de l'annonce ne peut pas être vide.");
+      toast.error("Le contenu de l'annonce ne peut pas être vide.");
       return;
     }
     
     if (targetType === 'group' && !selectedGroupId) {
-      alert("Veuillez sélectionner un groupe.");
+      toast.error("Veuillez sélectionner un groupe.");
       return;
     }
 
     if (targetType === 'filiere' && !selectedFiliereId) {
-      alert("Veuillez sélectionner une filière.");
+      toast.error("Veuillez sélectionner une filière.");
       return;
     }
 

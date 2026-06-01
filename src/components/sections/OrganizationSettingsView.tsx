@@ -261,14 +261,7 @@ export function OrganizationSettingsView({ onUpdate }: OrganizationSettingsViewP
   }, []);
 
   useEffect(() => {
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (hasUnsavedChanges) {
-        e.preventDefault();
-        e.returnValue = '';
-      }
-    };
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+    // Native beforeunload alerts have been removed as requested.
   }, [hasUnsavedChanges]);
 
   const fetchSettings = async () => {

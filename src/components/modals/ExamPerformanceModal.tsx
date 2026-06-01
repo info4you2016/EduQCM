@@ -18,6 +18,7 @@ import { cn, stripHtml, normalizeQuestion, formatScore, formatPercent } from '..
 import { ResultDetailsModal } from './ResultDetailsModal';
 import { ResultsExportTemplate } from '../ResultsExportTemplate';
 import { generateResultsPDF } from '../../lib/pdfExport';
+import { toast } from 'react-hot-toast';
 
 interface ExamPerformanceModalProps {
   exam: Exam;
@@ -64,9 +65,9 @@ export const ExamPerformanceModal = ({ exam, onClose, modules, filieres, groups,
         groupName,
         settings
       );
-    } catch (err) {
+    } catch (err: any) {
       console.error("PDF Export failed:", err);
-      alert("Erreur lors de l'exportation PDF.");
+      toast.error("Erreur lors de l'exportation PDF.");
     } finally {
       setIsExporting(false);
     }

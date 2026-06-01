@@ -4,6 +4,7 @@ import { api } from '../../lib/api';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
 import { cn } from '../../lib/utils';
+import { toast } from 'react-hot-toast';
 
 interface BulkImportStudentsProps {
   filiereId: number;
@@ -69,9 +70,9 @@ export const BulkImportStudents = ({ filiereId, groupId, groupName, onSuccess }:
         if (res.success > 0) {
           onSuccess();
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error("Bulk import failed:", err);
-        alert("L'importation a échoué. Vérifiez le format du fichier.");
+        toast.error(err.message || "L'importation a échoué. Vérifiez le format du fichier.");
       } finally {
         setIsImporting(false);
       }
