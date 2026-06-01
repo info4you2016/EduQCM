@@ -1267,31 +1267,9 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
       }
     };
 
-    const handleBlur = () => {
-      if (blurStartTimeRef.current === null) {
-        blurStartTimeRef.current = Date.now();
-      }
-      const exactTime = new Date().toLocaleTimeString('fr-FR');
-      triggerCheatAlert('blur', `Perte de focus de la fenêtre à ${exactTime}`);
-    };
-
-    const handleFocus = () => {
-      if (blurStartTimeRef.current !== null) {
-        const durationSec = Math.round((Date.now() - blurStartTimeRef.current) / 1000);
-        blurStartTimeRef.current = null;
-
-        const exactTime = new Date().toLocaleTimeString('fr-FR');
-        triggerCheatAlert('focus', `Récupération de focus à ${exactTime} (Fenêtre inactive pendant ${durationSec} secondes)`);
-      }
-    };
-
     document.addEventListener('visibilitychange', handleVisibilityChange);
-    window.addEventListener('blur', handleBlur);
-    window.addEventListener('focus', handleFocus);
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('blur', handleBlur);
-      window.removeEventListener('focus', handleFocus);
     };
   }, [hasStarted, showCompletion, isSubmitting, exam.id, user.id, user.displayName, user.registrationNumber, handleSubmit, exam.disableCopyPaste]);
 
