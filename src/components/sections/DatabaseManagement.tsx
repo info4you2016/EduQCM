@@ -53,6 +53,13 @@ export const DatabaseManagement = () => {
   const [diagnostic, setDiagnostic] = useState<DiagnosticData | null>(null);
   const [loadingDiagnostic, setLoadingDiagnostic] = useState(false);
   
+  // Drag & drop restore state
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [isDragActive, setIsDragActive] = useState(false);
+  const [confirmCheckbox, setConfirmCheckbox] = useState(false);
+  const [confirmTextInput, setConfirmTextInput] = useState('');
+  const [restoreCountdown, setRestoreCountdown] = useState<number | null>(null);
+
   // Custom states for Scheduled Automatic Backups
   const [settings, setSettings] = useState<any>(null);
   const [loadingSettings, setLoadingSettings] = useState(false);
@@ -248,6 +255,23 @@ export const DatabaseManagement = () => {
     return () => clearInterval(interval);
   }, [activeTab, realtimeEnabled]);
 
+  useEffect(() => {
+    if (restoreCountdown === null) return;
+    if (restoreCountdown === 0) {
+      toast.loading("Déconnexion sécurisée...", { duration: 3000 });
+      api.auth.logout()
+        .catch(err => console.debug("Silent logout error (already cleared or changed database):", err))
+        .finally(() => {
+          window.location.reload();
+        });
+      return;
+    }
+    const timer = setTimeout(() => {
+      setRestoreCountdown(prev => (prev !== null ? prev - 1 : null));
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [restoreCountdown]);
+
   const handleSaveSettings = async (updatedFields: any) => {
     setSavingSettings(true);
     try {
@@ -352,7 +376,7 @@ export const DatabaseManagement = () => {
       ctrl.finish();
       
       setTimeout(() => {
-        window.location.reload();
+        setRestoreCountdown(5);
       }, 1500);
     } catch (error: any) {
       console.error("Auto restore failed:", error);
@@ -429,9 +453,26 @@ export const DatabaseManagement = () => {
     }
   };
 
-  const handleRestore = async (event: React.ChangeEvent<HTMLInputElement>) => {
+  const initiateRestore = (file: File) => {
+    const ext = file.name.split('.').pop()?.toLowerCase();
+    if (ext !== 'db' && ext !== 'zip') {
+      toast.error("Format invalide. Seuls les fichiers .db et .zip sont acceptés.");
+      return;
+    }
+    setPendingFile(file);
+    setConfirmCheckbox(false);
+    setConfirmTextInput('');
+  };
+
+  const handleRestore = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    if (!file) return;
+    if (file) {
+      initiateRestore(file);
+    }
+  };
+
+  const executePendingRestore = async () => {
+    if (!pendingFile) return;
 
     setIsRestoring(true);
     
@@ -447,24 +488,25 @@ export const DatabaseManagement = () => {
     const ctrl = startProgress(
       'restore',
       'Restauration Complète Importée',
-      "Le fichier de données importé est en cours de traitement pour remplacer l'intégrité de la plateforme.",
+      `Le fichier de données '${pendingFile.name}' est en cours de traitement pour remplacer l'intégralité de la plateforme.`,
       steps
     );
 
     try {
       await new Promise(resolve => setTimeout(resolve, 1000));
-      await api.admin.restore(file);
+      await api.admin.restore(pendingFile);
       await new Promise(resolve => setTimeout(resolve, 1500));
       ctrl.finish();
       
       setTimeout(() => {
-        window.location.reload();
+        setRestoreCountdown(5);
       }, 1500);
     } catch (error: any) {
       console.error("Restore failed:", error);
       ctrl.fail(error?.message || "Le fichier importé n'est pas une base sqlite valide ou son archive est corrompue.");
     } finally {
       setIsRestoring(false);
+      setPendingFile(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
@@ -839,39 +881,132 @@ export const DatabaseManagement = () => {
                   <p className="text-xs text-slate-400">Importez une sauvegarde pour écraser entièrement l'état de l'application.</p>
                 </div>
 
-                <div className="p-4 bg-rose-50/35 border border-rose-100/50 rounded-2xl">
-                  <p className="text-[10px] text-rose-700 leading-relaxed font-bold flex items-start gap-1.5">
-                    <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-                    Attention : Cette action est irréversible. Toutes les données d'élèves, de notes, d'examens et historiques enregistrées sur l'ordinateur serveur seront définitivement détruites au profit de la base importée.
-                  </p>
-                </div>
+                {!pendingFile ? (
+                  <>
+                    <div className="p-4 bg-rose-50/35 border border-rose-100/50 rounded-2xl">
+                      <p className="text-[10px] text-rose-700 leading-relaxed font-bold flex items-start gap-1.5">
+                        <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                        Attention : Cette action est irréversible. Toutes les données d'élèves, de notes, d'examens et historiques enregistrées sur l'ordinateur serveur seront définitivement détruites au profit de la base importée.
+                      </p>
+                    </div>
+
+                    <div
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        setIsDragActive(true);
+                      }}
+                      onDragLeave={() => setIsDragActive(false)}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        setIsDragActive(false);
+                        const file = e.dataTransfer.files?.[0];
+                        if (file) {
+                          initiateRestore(file);
+                        }
+                      }}
+                      onClick={() => fileInputRef.current?.click()}
+                      className={`border-2 border-dashed rounded-2xl p-6 text-center cursor-pointer transition-all duration-200 flex flex-col items-center justify-center gap-2 ${
+                        isDragActive 
+                          ? "border-indigo-500 bg-indigo-50/35 shadow-inner" 
+                          : "border-slate-200 hover:border-indigo-400 hover:bg-slate-50/40"
+                      }`}
+                      id="dropzone-restore"
+                    >
+                      <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-600">
+                        <Upload className="w-5 h-5 text-slate-500" />
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-xs font-black text-slate-700 uppercase tracking-wide">Faites glisser votre fichier ici</p>
+                        <p className="text-[10px] text-slate-400 leading-normal">ou cliquez pour sélectionner un fichier (.db, .zip)</p>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="space-y-4" id="restore-double-confirm-panel">
+                    <div className="p-4 bg-amber-50/50 border border-amber-200 rounded-2xl space-y-3">
+                      <h5 className="text-xs font-black uppercase text-amber-800 tracking-wide flex items-center gap-2">
+                        <AlertTriangle className="w-4 h-4 text-amber-600 animate-bounce" />
+                        Fichier chargé pour restauration
+                      </h5>
+                      <div className="text-left font-mono text-[10px] text-slate-600 space-y-1 bg-white/80 p-3 rounded-xl border border-amber-100/50">
+                        <p><span className="font-extrabold text-slate-400">Nom :</span> {pendingFile.name}</p>
+                        <p><span className="font-extrabold text-slate-400">Taille :</span> {formatSize(pendingFile.size)}</p>
+                        <p><span className="font-extrabold text-slate-400">Type détecté :</span> {pendingFile.name.endsWith('.zip') ? 'Archive unifiée (.zip)' : 'Base binaire brute (.db)'}</p>
+                      </div>
+                    </div>
+
+                    <div className="bg-rose-50 border border-rose-100 p-4 rounded-2xl space-y-3">
+                      <p className="text-xs font-black text-rose-800 uppercase tracking-tight flex items-center gap-1.5 leading-none">
+                        <span className="h-2 w-2 rounded-full bg-rose-600 animate-ping shrink-0" />
+                        Mesure de sécurité obligatoire :
+                      </p>
+                      <p className="text-[10px] text-rose-700 leading-relaxed font-semibold">
+                        Afin de prévenir tout écrasement accidentel de vos copies et activités d'élèves, veuillez confirmer formellement l'application définitive de cette sauvegarde.
+                      </p>
+
+                      <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={confirmCheckbox}
+                          onChange={(e) => setConfirmCheckbox(e.target.checked)}
+                          className="mt-0.5 rounded border-rose-300 text-rose-600 focus:ring-rose-500 w-3.5 h-3.5 accent-rose-600 animate-pulse"
+                        />
+                        <span className="text-[10px] text-rose-950 font-bold leading-normal">
+                          Je confirme vouloir détruire toutes les données de ce serveur pour appliquer cette sauvegarde.
+                        </span>
+                      </label>
+
+                      <div className="space-y-1 pt-1">
+                        <p className="text-[10px] font-bold text-rose-900 uppercase tracking-wide">Saisissez le mot de confirmation "<span className="font-black underline select-all">RESTAURER</span>" :</p>
+                        <input
+                          type="text"
+                          value={confirmTextInput}
+                          onChange={(e) => setConfirmTextInput(e.target.value)}
+                          placeholder="Saisissez RESTAURER..."
+                          className="w-full text-xs font-bold p-2.5 rounded-xl border border-rose-200 bg-white focus:outline-hidden focus:ring-2 focus:ring-rose-500/30 text-rose-700 uppercase"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="space-y-3">
-                <Button 
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={isRestoring}
-                  variant="outline"
-                  className="w-full py-3.5 text-[10px] font-black uppercase tracking-widest border-2 border-slate-200 hover:bg-slate-50 hover:text-slate-900 flex items-center justify-center gap-2 shadow-sm"
-                  id="btn-upload-restore"
-                >
-                  {isRestoring ? (
-                    <RefreshCw className="w-4 h-4 animate-spin text-indigo-600" />
-                  ) : (
-                    <>
-                      <Upload className="w-4 h-4" /> Restaurer / Restaurer ZIP
-                    </>
-                  )}
-                </Button>
-                <input 
-                  type="file" 
-                  ref={fileInputRef} 
-                  onChange={handleRestore} 
-                  className="hidden" 
-                  accept=".db,.zip"
-                  id="file-import-input"
-                />
-                <p className="text-[9px] text-slate-400 text-center font-bold uppercase tracking-wider">Accepte les fichiers .db ou archives complètes .zip</p>
+                {pendingFile ? (
+                  <div className="flex gap-2">
+                    <Button
+                      onClick={() => setPendingFile(null)}
+                      variant="outline"
+                      disabled={isRestoring}
+                      className="w-1/3 py-3 text-[10px] font-black uppercase tracking-wider border-2 border-slate-200 hover:bg-slate-50 hover:text-slate-900"
+                    >
+                      Annuler
+                    </Button>
+                    <Button
+                      onClick={executePendingRestore}
+                      disabled={isRestoring || !confirmCheckbox || confirmTextInput.toUpperCase() !== 'RESTAURER'}
+                      className="w-2/3 py-3 text-[10px] bg-rose-600 hover:bg-rose-700 text-white font-black uppercase tracking-wider disabled:opacity-45 disabled:hover:bg-rose-600 border-none shadow-xs"
+                    >
+                      {isRestoring ? (
+                        <RefreshCw className="w-4 h-4 animate-spin text-white" />
+                      ) : (
+                        "Confirmer la restauration"
+                      )}
+                    </Button>
+                  </div>
+                ) : (
+                  <>
+                    <input 
+                      type="file" 
+                      ref={fileInputRef} 
+                      onChange={handleRestore} 
+                      className="hidden" 
+                      accept=".db,.zip"
+                      id="file-import-input"
+                    />
+                    <p className="text-[9px] text-slate-400 text-center font-bold uppercase tracking-wider">Accepte les fichiers .db ou archives complètes .zip</p>
+                  </>
+                )}
               </div>
             </Card>
           </div>
@@ -1615,6 +1750,63 @@ export const DatabaseManagement = () => {
                     {progress.type === 'restore' ? 'Redémarrage...' : 'Terminer'}
                   </Button>
                 )}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Dynamic Hot-Swap Status & Session Restart Countdown Overlay */}
+      <AnimatePresence>
+        {restoreCountdown !== null && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md"
+            id="restore-countdown-overlay"
+          >
+            <motion.div
+              initial={{ scale: 0.95, y: 30 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, y: 30 }}
+              transition={{ type: 'spring', damping: 25, stiffness: 220 }}
+              className="w-full max-w-md bg-white rounded-3xl border-4 border-indigo-600/10 shadow-2xl p-8 space-y-6 text-center overflow-hidden"
+              id="restore-countdown-card"
+            >
+              {/* Spinning success visual pairing */}
+              <div className="flex justify-center">
+                <div className="relative flex items-center justify-center w-20 h-20 rounded-2xl bg-indigo-50 border border-indigo-100 text-indigo-600">
+                  <ShieldCheck className="w-10 h-10 animate-pulse text-indigo-600" />
+                  <span className="absolute -inset-1 rounded-2xl border border-indigo-500/25 animate-ping opacity-60" />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <h3 className="text-lg font-black uppercase text-slate-900 tracking-tight leading-none">Restauration à chaud effectuée !</h3>
+                <p className="text-[10px] text-indigo-600 font-extrabold uppercase tracking-widest bg-indigo-50 inline-block px-3 py-1 rounded-full border border-indigo-100/40">
+                  Aucun redémarrage serveur requis
+                </p>
+              </div>
+
+              <div className="space-y-3 px-2">
+                <p className="text-xs text-slate-600 leading-relaxed font-medium">
+                  Le moteur de l'application a interchangé la base de données SQLite à chaud avec succès.
+                </p>
+                <p className="text-[11px] text-slate-500 leading-normal font-semibold">
+                  Pour votre sécurité et pour prévenir toute corruption de session locale (les comptes d'élèves et professeurs ayant été remplacés), vous serez déconnecté et votre session sera réinitialisée automatiquement.
+                </p>
+              </div>
+
+              {/* Graphical countdown indicator */}
+              <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 flex items-center justify-between gap-4">
+                <div className="text-left">
+                  <span className="text-[9px] font-black uppercase tracking-wider text-slate-400 block leading-none">Statut de redirection</span>
+                  <span className="text-xs font-extrabold text-slate-800 block mt-1 leading-none">Rechargement de la session...</span>
+                </div>
+                <div className="h-10 w-10 rounded-full bg-indigo-600 text-white flex items-center justify-center font-black text-sm select-none shadow-sm animate-bounce">
+                  {restoreCountdown}s
+                </div>
               </div>
             </motion.div>
           </motion.div>

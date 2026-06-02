@@ -768,6 +768,10 @@ async function startServer() {
     socket.on("authenticate", (userData: any) => {
       if (!userData) return;
       
+      (socket as any).userId = userData.id;
+      updateOnlineUser(userData);
+      io.emit("chat:online-users:update", Array.from(onlineUsers.values()));
+      
       // Leave all rooms except the default one (socket.id)
       for (const room of socket.rooms) {
         if (room !== socket.id) {
@@ -790,6 +794,22 @@ async function startServer() {
       
       // Join individual user room for private notifs if needed
       socket.join(`user-${userData.id}`);
+    });
+
+    socket.on("chat:ping-status", (data: any) => {
+      if (data && data.user) {
+        (socket as any).userId = data.user.id;
+        updateOnlineUser(data.user);
+        io.emit("chat:online-users:update", Array.from(onlineUsers.values()));
+      }
+    });
+
+    socket.on("disconnect", () => {
+      const uId = (socket as any).userId;
+      if (uId) {
+        onlineUsers.delete(uId);
+        io.emit("chat:online-users:update", Array.from(onlineUsers.values()));
+      }
     });
 
     // --- REALTIME CHAT SYSTEM HANDLERS ---
@@ -2993,12 +3013,44 @@ Instructions pour le feedback :
         db.pragma("optimize");
         await db.backup(backupDbPath);
         
-        const users = db.prepare("SELECT id, email, displayName, role, groupName, filiere, groupId, filiereId, badge, points, createdAt FROM users").all() || [];
+        const users = db.prepare("SELECT id, email, displayName, role, groupName, filiere, groupId, filiereId, registrationNumber, createdAt FROM users").all() || [];
         const groups = db.prepare("SELECT * FROM groups").all() || [];
         const modules = db.prepare("SELECT * FROM modules").all() || [];
-        const exams = db.prepare("SELECT id, title, description, moduleId, teacherId, isOnline, isLive, duration, totalPoints, status, successScore, createdAt FROM exams").all() || [];
-        const questions = db.prepare("SELECT * FROM exam_questions").all() || [];
-        const results = db.prepare("SELECT * FROM exam_results").all() || [];
+        
+        const examsRaw = (db.prepare("SELECT * FROM exams").all() || []) as any[];
+        const exams = examsRaw.map((e: any) => ({
+          id: e.id,
+          title: e.title,
+          description: e.description || "",
+          moduleId: e.moduleId,
+          teacherId: e.teacherId,
+          type: e.type || "controle-continu",
+          durationMinutes: e.durationMinutes || 30,
+          status: e.status || "draft",
+          groupId: e.groupId || null,
+          createdAt: e.createdAt
+        }));
+
+        const questions: any[] = [];
+        for (const e of examsRaw) {
+          try {
+            const qList = JSON.parse(e.questions || "[]");
+            if (Array.isArray(qList)) {
+              for (const q of qList) {
+                questions.push({
+                  examId: e.id,
+                  questionId: q.id || "",
+                  text: q.text || q.label || "",
+                  options: Array.isArray(q.options) ? q.options.join(" | ") : (q.options || ""),
+                  correctAnswer: q.correctAnswer || q.answer || "",
+                  points: q.points || ""
+                });
+              }
+            }
+          } catch (err) {}
+        }
+
+        const results = db.prepare("SELECT * FROM results").all() || [];
         const logs = db.prepare("SELECT * FROM audit_logs").all() || [];
         
         const convertToCSV = (arr: any[]) => {

@@ -83,6 +83,48 @@ export const ChatWidget: React.FC<ChatWidgetProps> = ({ user }) => {
   const [attachLinkTitle, setAttachLinkTitle] = useState('');
   const [attachLinkUrl, setAttachLinkUrl] = useState('');
 
+  const [onlineUsers, setOnlineUsers] = useState<any[]>([]);
+  const [showOnlineList, setShowOnlineList] = useState(false);
+
+  // Sync online users from the backend & socket
+  useEffect(() => {
+    if (!isOpen) return;
+
+    let active = true;
+
+    const fetchOnline = () => {
+      api.admin.getOnlineUsers()
+        .then((data: any) => {
+          if (active) {
+            setOnlineUsers(data || []);
+          }
+        })
+        .catch(err => console.error("Could not fetch online users:", err));
+    };
+
+    fetchOnline();
+    
+    // Broadcast status ping 
+    socket.emit("chat:ping-status", { user });
+
+    const handleOnlineUpdate = (users: any[]) => {
+      if (active) {
+        setOnlineUsers(users || []);
+      }
+    };
+
+    socket.on("chat:online-users:update", handleOnlineUpdate);
+
+    // Refresh every 12 seconds
+    const interval = setInterval(fetchOnline, 12000);
+
+    return () => {
+      active = false;
+      socket.off("chat:online-users:update", handleOnlineUpdate);
+      clearInterval(interval);
+    };
+  }, [isOpen, user]);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const scrollIntervalRef = useRef<boolean>(false);
@@ -626,7 +668,31 @@ export const ChatWidget: React.FC<ChatWidgetProps> = ({ user }) => {
               <div className="flex items-center gap-1.5">
                 <button
                   type="button"
-                  onClick={() => setShowSearch(!showSearch)}
+                  onClick={() => {
+                    setShowOnlineList(!showOnlineList);
+                    if (showSearch) setShowSearch(false);
+                  }}
+                  className={cn(
+                    "w-8 h-8 rounded-xl flex items-center justify-center transition-all cursor-pointer relative",
+                    showOnlineList ? "bg-white/25 text-white" : "bg-white/10 text-white/70 hover:bg-white/25"
+                  )}
+                  title="Membres en ligne"
+                >
+                  <Users className="w-4 h-4" />
+                  {onlineUsers.length > 0 && (
+                    <span className="absolute -top-1 -right-0.5 flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                    </span>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowSearch(!showSearch);
+                    if (showOnlineList) setShowOnlineList(false);
+                  }}
                   className={cn(
                     "w-8 h-8 rounded-xl flex items-center justify-center transition-all cursor-pointer",
                     showSearch ? "bg-white/25 text-white" : "bg-white/10 text-white/70 hover:bg-white/25"
@@ -1294,6 +1360,92 @@ export const ChatWidget: React.FC<ChatWidgetProps> = ({ user }) => {
                 </button>
               </form>
             </div>
+
+            {/* Online Members Slide-Over Drawer */}
+            <AnimatePresence>
+              {showOnlineList && (
+                <motion.div
+                  initial={{ opacity: 0, x: 200 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 200 }}
+                  transition={{ type: 'spring', damping: 25, stiffness: 220 }}
+                  className="absolute left-0 right-0 bottom-0 top-[76px] bg-slate-900 z-40 flex flex-col overflow-hidden"
+                >
+                  {/* Drawer Header */}
+                  <div className="p-4 border-b border-zinc-800 bg-slate-950 flex items-center justify-between shrink-0 select-none">
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-lg bg-emerald-500/20 flex items-center justify-center text-emerald-400">
+                        <Users className="w-3.5 h-3.5" />
+                      </div>
+                      <div>
+                        <h4 className="text-xs font-black uppercase text-zinc-100 tracking-wider">Membres Connectés</h4>
+                        <p className="text-[9px] text-zinc-400 font-bold uppercase tracking-widest">{onlineUsers.length} personne{onlineUsers.length > 1 ? 's' : ''} en ligne</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowOnlineList(false)}
+                      className="w-7 h-7 rounded-lg bg-zinc-800/80 hover:bg-zinc-700 hover:text-white text-zinc-400 flex items-center justify-center transition-all cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  {/* Online Users List */}
+                  <div className="flex-1 overflow-y-auto p-4 space-y-2.5 custom-scrollbar bg-slate-900/90">
+                    {onlineUsers.length === 0 ? (
+                      <div className="h-full flex flex-col items-center justify-center text-center p-6">
+                        <div className="w-10 h-10 rounded-full bg-zinc-800 flex items-center justify-center mb-3">
+                          <Users className="w-5 h-5 text-zinc-500 animate-pulse" />
+                        </div>
+                        <p className="text-xs font-black text-zinc-400 uppercase tracking-wide">Actualisation...</p>
+                      </div>
+                    ) : (
+                      onlineUsers.map(u => {
+                        const isYou = u.id === user.id;
+                        const roleLabel = u.role === 'teacher' ? 'Formateur' : u.role === 'admin' ? 'Administrateur' : 'Étudiant';
+                        const roleColorClass = u.role === 'teacher' 
+                          ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20' 
+                          : u.role === 'admin' 
+                            ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20' 
+                            : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20';
+
+                        return (
+                          <motion.div
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            key={u.id}
+                            className="p-3 bg-zinc-800/40 border border-zinc-800/60 rounded-2xl flex items-center justify-between gap-3 shadow-xs hover:bg-zinc-800/80 transition-all duration-200"
+                          >
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className="relative">
+                                <div className="w-9 h-9 rounded-xl bg-zinc-800 border border-zinc-700 flex items-center justify-center text-xs font-black text-white shrink-0 uppercase tracking-tight select-none">
+                                  {u.displayName.split(' ').map((n: string) => n[0]).join('').substring(0, 2)}
+                                </div>
+                                <span className="absolute -bottom-0.5 -right-0.5 block h-2.5 w-2.5 rounded-full bg-emerald-500 ring-2 ring-slate-900 animate-pulse" />
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-xs font-black text-zinc-100 truncate flex items-center gap-1.5 leading-none">
+                                  {u.displayName}
+                                  {isYou && (
+                                    <span className="text-[8px] bg-indigo-500 text-white font-black uppercase px-1.5 py-0.5 rounded-md leading-none">Moi</span>
+                                  )}
+                                </p>
+                                <p className="text-[10px] text-zinc-500 truncate leading-none mt-1 font-semibold">{u.email || 'Pas d\'email renseigné'}</p>
+                              </div>
+                            </div>
+
+                            <span className={cn("text-[8px] font-black uppercase tracking-wider px-2 py-1 rounded-lg leading-none shrink-0", roleColorClass)}>
+                              {roleLabel}
+                            </span>
+                          </motion.div>
+                        );
+                      })
+                    )}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </motion.div>
         )}
       </AnimatePresence>
