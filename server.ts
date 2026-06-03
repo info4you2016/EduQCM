@@ -175,6 +175,8 @@ db.pragma("foreign_keys = ON");
 
 const upload = multer({ dest: "uploads/" });
 
+function runAllDatabaseMigrations() {
+  console.log("[MIGRATIONS] Running all database table initialization & structural migrations...");
   // Initialize tables one by one for robustness
   const tables = [
     `CREATE TABLE IF NOT EXISTS filieres (
@@ -232,6 +234,8 @@ const upload = multer({ dest: "uploads/" });
       scheduledAt DATETIME,
       status TEXT DEFAULT 'draft',
       groupId INTEGER,
+      shuffleQuestions INTEGER DEFAULT 0,
+      disableCopyPaste INTEGER DEFAULT 0,
       createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(moduleId) REFERENCES modules(id),
       FOREIGN KEY(teacherId) REFERENCES users(id),
@@ -365,6 +369,8 @@ const upload = multer({ dest: "uploads/" });
   try { db.exec("ALTER TABLE settings ADD COLUMN showFooter INTEGER DEFAULT 1"); } catch (e) {}
   try { db.exec("ALTER TABLE results ADD COLUMN questionResults TEXT"); } catch (e) {}
   try { db.exec("ALTER TABLE exams ADD COLUMN scheduledAt DATETIME"); } catch (e) {}
+  try { db.exec("ALTER TABLE exams ADD COLUMN shuffleQuestions INTEGER DEFAULT 0"); } catch (e) {}
+  try { db.exec("ALTER TABLE exams ADD COLUMN disableCopyPaste INTEGER DEFAULT 0"); } catch (e) {}
   try { db.exec("ALTER TABLE filieres ADD COLUMN code TEXT"); } catch (e) {}
   try { db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_filieres_code ON filieres(code)"); } catch (e) {}
   try { db.exec("ALTER TABLE filieres ADD COLUMN description TEXT"); } catch (e) {}
@@ -520,6 +526,8 @@ try {
             scheduledAt DATETIME,
             status TEXT DEFAULT 'draft',
             groupId INTEGER,
+            shuffleQuestions INTEGER DEFAULT 0,
+            disableCopyPaste INTEGER DEFAULT 0,
             createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(moduleId) REFERENCES modules(id),
             FOREIGN KEY(teacherId) REFERENCES users(id),
@@ -551,6 +559,10 @@ try {
 
 // Ensure filieres NOT NULL constraints if possible (SQLite doesn't support this easily with ALTER TABLE, 
 // but we least want to make sure 'code' and 'name' are treated meaningfully)
+}
+
+// Run migrations on initial server startup
+runAllDatabaseMigrations();
 
 // --- Structured Memory Cache Strategy ---
 class ServerMemoryCache {
@@ -1695,7 +1707,9 @@ Instructions pour le feedback :
     const parsedExams = exams.map((e: any) => ({ 
       ...e, 
       questions: JSON.parse(e.questions),
-      hasResults: e.resultsCount > 0
+      hasResults: e.resultsCount > 0,
+      shuffleQuestions: e.shuffleQuestions === 1,
+      disableCopyPaste: e.disableCopyPaste === 1
     }));
     cacheManager.set(cacheKey, parsedExams, 300);
     res.json(parsedExams);
@@ -1704,7 +1718,7 @@ Instructions pour le feedback :
   app.post("/api/exams", authenticate, (req: any, res) => {
     if (req.user.role === 'student') return res.status(403).json({ error: "Forbidden" });
     try {
-      const { title, description, moduleId, type, durationMinutes, questions, scheduledAt } = req.body;
+      const { title, description, moduleId, type, durationMinutes, questions, scheduledAt, shuffleQuestions, disableCopyPaste } = req.body;
       
       console.log("Creating exam with data:", { title, moduleId, type, teacherId: req.user.id });
 
@@ -1725,10 +1739,34 @@ Instructions pour le feedback :
         return res.status(400).json({ error: "Utilisateur non trouvé." });
       }
 
-      const stmt = db.prepare("INSERT INTO exams (title, description, moduleId, type, teacherId, durationMinutes, questions, scheduledAt, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft')");
-      const result = stmt.run(title, description, moduleId, type || 'controle-continu', req.user.id, durationMinutes, JSON.stringify(questions), scheduledAt);
+      const stmt = db.prepare("INSERT INTO exams (title, description, moduleId, type, teacherId, durationMinutes, questions, scheduledAt, status, shuffleQuestions, disableCopyPaste) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)");
+      const result = stmt.run(
+        title, 
+        description, 
+        moduleId, 
+        type || 'controle-continu', 
+        req.user.id, 
+        durationMinutes, 
+        JSON.stringify(questions), 
+        scheduledAt, 
+        shuffleQuestions ? 1 : 0, 
+        disableCopyPaste ? 1 : 0
+      );
       clearCache('exams');
-      res.json({ id: Number(result.lastInsertRowid), title, description, moduleId, type: type || 'controle-continu', teacherId: req.user.id, durationMinutes, questions, scheduledAt, status: 'draft' });
+      res.json({ 
+        id: Number(result.lastInsertRowid), 
+        title, 
+        description, 
+        moduleId, 
+        type: type || 'controle-continu', 
+        teacherId: req.user.id, 
+        durationMinutes, 
+        questions, 
+        scheduledAt, 
+        status: 'draft',
+        shuffleQuestions: !!shuffleQuestions,
+        disableCopyPaste: !!disableCopyPaste
+      });
     } catch (err: any) {
       console.error("Error creating exam:", err);
       if (err.message && err.message.includes("FOREIGN KEY")) {
@@ -1858,7 +1896,7 @@ Instructions pour le feedback :
     const { id } = req.params;
     
     try {
-      const { title, description, moduleId, type, durationMinutes, questions, scheduledAt } = req.body;
+      const { title, description, moduleId, type, durationMinutes, questions, scheduledAt, shuffleQuestions, disableCopyPaste } = req.body;
       
       console.log(`Updating exam ${id} with data:`, { title, moduleId, type, teacherId: req.user.id });
 
@@ -1885,12 +1923,35 @@ Instructions pour le feedback :
         return res.status(400).json({ error: "Utilisateur non trouvé." });
       }
 
-      const stmt = db.prepare("UPDATE exams SET title = ?, description = ?, moduleId = ?, type = ?, durationMinutes = ?, questions = ?, scheduledAt = ? WHERE id = ? AND teacherId = ?");
-      const result = stmt.run(title, description, moduleId, type || 'controle-continu', durationMinutes, JSON.stringify(questions), scheduledAt, id, req.user.id);
+      const stmt = db.prepare("UPDATE exams SET title = ?, description = ?, moduleId = ?, type = ?, durationMinutes = ?, questions = ?, scheduledAt = ?, shuffleQuestions = ?, disableCopyPaste = ? WHERE id = ? AND teacherId = ?");
+      const result = stmt.run(
+        title, 
+        description, 
+        moduleId, 
+        type || 'controle-continu', 
+        durationMinutes, 
+        JSON.stringify(questions), 
+        scheduledAt, 
+        shuffleQuestions ? 1 : 0, 
+        disableCopyPaste ? 1 : 0, 
+        id, 
+        req.user.id
+      );
       
       if (result.changes === 0) return res.status(404).json({ error: "Examen non trouvé ou non autorisé." });
       clearCache('exams');
-      res.json({ id: Number(id), title, description, moduleId, type, durationMinutes, questions, scheduledAt });
+      res.json({ 
+        id: Number(id), 
+        title, 
+        description, 
+        moduleId, 
+        type, 
+        durationMinutes, 
+        questions, 
+        scheduledAt,
+        shuffleQuestions: !!shuffleQuestions,
+        disableCopyPaste: !!disableCopyPaste
+      });
     } catch (err: any) {
       console.error("Error updating exam:", err);
       if (err.message && err.message.includes("FOREIGN KEY")) {
@@ -1969,35 +2030,54 @@ Instructions pour le feedback :
       errors: [] as string[]
     };
 
-    const insertStmt = db.prepare("INSERT INTO users (email, password, displayName, role, groupName, groupId, filiereId, registrationNumber) VALUES (?, ?, ?, 'student', ?, ?, ?, ?)");
-    
-    const transaction = db.transaction((studentList) => {
-      for (const student of studentList) {
-        try {
-          const hashedPassword = bcrypt.hashSync(student.password || "Ofppt2024", 10);
-          insertStmt.run(
-            student.email, 
-            hashedPassword, 
-            student.displayName, 
-            student.groupName || null, 
-            student.groupId || null, 
-            student.filiereId || null,
-            student.registrationNumber || null
-          );
-          results.success++;
-        } catch (e: any) {
-          results.failed++;
-          results.errors.push(`${student.email}: ${e.message}`);
-        }
-      }
-    });
-
     try {
-      transaction(students);
+      console.log(`[BULK IMPORT] Starting bulk import of ${students.length} students. Hashing passwords asynchronously...`);
+      // Hash all passwords asynchronously first to avoid blocking the single-threaded Node event loop
+      const studentsWithHashes = await Promise.all(
+        students.map(async (student) => {
+          try {
+            const rawPassword = student.password || "Ofppt2024";
+            const hashedPassword = await bcrypt.hash(rawPassword, 10);
+            return { ...student, hashedPassword };
+          } catch (hashErr: any) {
+            return { ...student, hashedPassword: null, error: `Erreur de hachage: ${hashErr.message}` };
+          }
+        })
+      );
+
+      const insertStmt = db.prepare("INSERT INTO users (email, password, displayName, role, groupName, groupId, filiereId, registrationNumber) VALUES (?, ?, ?, 'student', ?, ?, ?, ?)");
+      
+      const transaction = db.transaction((studentList) => {
+        for (const student of studentList) {
+          if (student.error) {
+            results.failed++;
+            results.errors.push(`${student.email || 'Inconnu'}: ${student.error}`);
+            continue;
+          }
+          try {
+            insertStmt.run(
+              student.email, 
+              student.hashedPassword, 
+              student.displayName, 
+              student.groupName || null, 
+              student.groupId || null, 
+              student.filiereId || null,
+              student.registrationNumber || null
+            );
+            results.success++;
+          } catch (e: any) {
+            results.failed++;
+            results.errors.push(`${student.email}: ${e.message}`);
+          }
+        }
+      });
+
+      transaction(studentsWithHashes);
       clearCache('users');
       clearCache('groups');
       res.json(results);
     } catch (err: any) {
+      console.error("[BULK IMPORT] Error in bulk import:", err);
       res.status(500).json({ error: err.message });
     }
   });
@@ -3028,7 +3108,9 @@ Instructions pour le feedback :
           durationMinutes: e.durationMinutes || 30,
           status: e.status || "draft",
           groupId: e.groupId || null,
-          createdAt: e.createdAt
+          createdAt: e.createdAt,
+          shuffleQuestions: e.shuffleQuestions === 1,
+          disableCopyPaste: e.disableCopyPaste === 1
         }));
 
         const questions: any[] = [];
@@ -3598,6 +3680,9 @@ Instructions pour le feedback :
       db.pragma("foreign_keys = ON");
       console.log("Database connection re-opened after restore.");
       
+      // Ensure the restored database contains all modern schema upgrades
+      runAllDatabaseMigrations();
+      
       createLog(req.user.id, "RESTORE_DB", `Restauration de la base de données effectuée (${isZip ? 'Archive ZIP' : 'Binaire DB'})`);
       res.json({ success: true, message: "La base de données a été restaurée avec succès." });
     } catch (err: any) {
@@ -3867,6 +3952,9 @@ Instructions pour le feedback :
       db.pragma("journal_mode = WAL");
       db.pragma("foreign_keys = ON");
       console.log("[AUTO-RESTORE] Database connection re-established.");
+
+      // Ensure the restored database contains all modern schema upgrades
+      runAllDatabaseMigrations();
 
       createLog(req.user.id, "RESTORE_DB", `Restauration effectuée depuis la sauvegarde automatique : ${filename}`);
       res.json({ success: true, message: "La base de données a été restaurée avec succès à partir de la sauvegarde automatique !" });

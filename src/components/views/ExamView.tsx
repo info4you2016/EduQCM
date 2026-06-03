@@ -303,10 +303,13 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
 
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(() => {
     const saved = localStorage.getItem(`exam_current_index_${exam.id}_${user.id}`);
-    return saved ? parseInt(saved) : 0;
+    const idx = saved ? parseInt(saved, 10) : 0;
+    return idx >= 0 ? idx : 0;
   });
 
-  const currentQuestion = questions[currentQuestionIndex];
+  // Safeguard: Ensure currentQuestionIndex is within bounds of questions list
+  const safeQuestionIndex = (currentQuestionIndex >= 0 && currentQuestionIndex < questions.length) ? currentQuestionIndex : 0;
+  const currentQuestion = questions[safeQuestionIndex];
 
   const [answers, setAnswers] = useState<any[]>(() => {
     const sessionKey = getExamSessionKey(exam.id, user.id);
@@ -316,9 +319,9 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
       if (decrypted) return decrypted;
     }
     return questions.map(q => {
-      if (q.type === 'ordering') return q.runtimeOptions.map(opt => opt.idx);
-      if (q.type === 'matching') return q.runtimeMatchOptions.map(mOpt => mOpt.idx);
-      if (q.type === 'fill-in-the-blanks') return new Array(q.correctAnswers?.length || 0).fill('');
+      if (q.type === 'ordering') return (q.runtimeOptions || []).map(opt => opt.idx);
+      if (q.type === 'matching') return (q.runtimeMatchOptions || []).map(mOpt => mOpt.idx);
+      if (q.type === 'fill-in-the-blanks') return new Array((q.correctAnswers && q.correctAnswers.length) || 0).fill('');
       return null;
     });
   });
@@ -645,8 +648,9 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
             localStorage.setItem(`exam_answers_${exam.id}_${user.id}`, encryptData(savedState.answers, sessionKey));
           }
           if (typeof savedState.currentQuestionIndex === 'number') {
-            setCurrentQuestionIndex(savedState.currentQuestionIndex);
-            localStorage.setItem(`exam_current_index_${exam.id}_${user.id}`, savedState.currentQuestionIndex.toString());
+            const idx = Math.max(0, Math.min(savedState.currentQuestionIndex, (savedState.questions?.length || questions.length || 1) - 1));
+            setCurrentQuestionIndex(idx);
+            localStorage.setItem(`exam_current_index_${exam.id}_${user.id}`, idx.toString());
           }
           if (typeof savedState.tabExitCount === 'number') {
             setTabExitCount(savedState.tabExitCount);
@@ -1451,18 +1455,6 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
     }
   };
 
-  if (!currentQuestion) return null;
-
-  const progress = ((currentQuestionIndex + 1) / questions.length) * 100;
-  const answeredCount = answers.filter(a => a !== null && (!Array.isArray(a) || (a as any[]).every(v => v !== -1 && v !== '' && v !== null))).length;
-  const qAr = isArabic(currentQuestion.text);
-
-  const stats = {
-    answered: answeredCount,
-    unanswered: questions.length - answeredCount,
-    total: questions.length
-  };
-
   if (!hasStarted) {
     return (
       <div className="min-h-[80vh] flex items-center justify-center p-4">
@@ -1534,6 +1526,18 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
       </div>
     );
   }
+
+  if (!currentQuestion) return null;
+
+  const progress = ((currentQuestionIndex + 1) / questions.length) * 100;
+  const answeredCount = answers.filter(a => a !== null && (!Array.isArray(a) || (a as any[]).every(v => v !== -1 && v !== '' && v !== null))).length;
+  const qAr = isArabic(currentQuestion.text);
+
+  const stats = {
+    answered: answeredCount,
+    unanswered: questions.length - answeredCount,
+    total: questions.length
+  };
 
   if (needsFullscreenRestore) {
     return (
