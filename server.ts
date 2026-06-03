@@ -1940,6 +1940,7 @@ Instructions pour le feedback :
       
       if (result.changes === 0) return res.status(404).json({ error: "Examen non trouvé ou non autorisé." });
       clearCache('exams');
+      io.emit("data-update");
       res.json({ 
         id: Number(id), 
         title, 
