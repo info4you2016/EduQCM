@@ -12,7 +12,8 @@ import {
   Users,
   Database,
   Sparkles,
-  Settings
+  Settings,
+  Plus
 } from 'lucide-react';
 import { api, socket, setOnDualSessionDetected } from './lib/api';
 import { cn } from './lib/utils';
@@ -195,6 +196,18 @@ export default function App() {
     }
   }, [user, fetchData]);
 
+  // Synchronize activeExam with the latest fetched exam from the exams list
+  useEffect(() => {
+    if (activeExam) {
+      const updatedExam = exams.find(e => e.id === activeExam.id);
+      if (updatedExam) {
+        if (JSON.stringify(updatedExam) !== JSON.stringify(activeExam)) {
+          setActiveExam(updatedExam);
+        }
+      }
+    }
+  }, [exams, activeExam, setActiveExam]);
+
   if (loadingAuth) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
@@ -230,6 +243,23 @@ export default function App() {
               </div>
 
               <div className="flex items-center gap-4">
+                {user && (user.role === 'teacher' || user.role === 'admin') && (
+                  <div className="hidden md:flex items-center gap-2 mr-2">
+                    <button 
+                      onClick={() => window.dispatchEvent(new CustomEvent('trigger-add-exam'))}
+                      className="bg-indigo-600 hover:bg-indigo-700 text-white font-black py-2.5 px-4 rounded-xl shadow-md shadow-indigo-600/10 text-xs flex items-center gap-1.5 cursor-pointer transition-all active:scale-95 whitespace-nowrap border-none"
+                    >
+                      <Plus className="w-4 h-4" /> Nouvel Examen
+                    </button>
+                    <button 
+                      onClick={() => window.dispatchEvent(new CustomEvent('trigger-add-module'))}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-black py-2.5 px-4 rounded-xl shadow-md shadow-emerald-500/10 text-xs flex items-center gap-1.5 cursor-pointer transition-all active:scale-95 whitespace-nowrap border-none"
+                    >
+                      <Plus className="w-4 h-4" /> Nouveau Module
+                    </button>
+                  </div>
+                )}
+
                 <OnlineUsersDropdown onlineUsers={onlineUsers} />
                 
                 <NotificationsDropdown 

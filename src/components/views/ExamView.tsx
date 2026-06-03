@@ -630,6 +630,16 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
     return !isFull;
   });
 
+  // Automatically reset all active anti-cheat/lock states and warning modals if the teacher deactivates anti-cheat in real-time
+  useEffect(() => {
+    if (!exam.disableCopyPaste) {
+      setNeedsFullscreenRestore(false);
+      setIsPausedByFullscreen(false);
+      setShowFullscreenWarningModal(false);
+      setShowTabExitWarningModal(false);
+    }
+  }, [exam.disableCopyPaste]);
+
   // Load and restore of state from IndexedDB in case of local cache wipes / browser restarts
   useEffect(() => {
     const initAndRestoreState = async () => {

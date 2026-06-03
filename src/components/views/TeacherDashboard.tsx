@@ -111,6 +111,23 @@ export const TeacherDashboard = ({
     setExpandedQuestionIdx(null);
   }, [selectedExamId]);
 
+  React.useEffect(() => {
+    const handleAddExam = () => {
+      setActiveTab('exams');
+      setIsAddingExam(true);
+    };
+    const handleAddModule = () => {
+      setActiveTab('modules');
+      setIsAddingModule(true);
+    };
+    window.addEventListener('trigger-add-exam', handleAddExam);
+    window.addEventListener('trigger-add-module', handleAddModule);
+    return () => {
+      window.removeEventListener('trigger-add-exam', handleAddExam);
+      window.removeEventListener('trigger-add-module', handleAddModule);
+    };
+  }, []);
+
   const [sortBy, setSortBy] = useState<'createdAt' | 'title'>('createdAt');
   const [previewExam, setPreviewExam] = useState<Exam | null>(null);
   const [supervisingExam, setSupervisingExam] = useState<Exam | null>(null);
@@ -821,81 +838,105 @@ export const TeacherDashboard = ({
   ];
 
   return (
-    <div className="flex flex-col lg:flex-row gap-10">
-      {/* Sidebar Navigation - Hidden on mobile, shown on lg screens */}
-      <aside className="hidden lg:block lg:w-72 shrink-0">
-        <div className="sticky top-10 space-y-10">
-          <div className="space-y-8">
-            {navGroups.map((group, groupIdx) => (
-              <div key={group.title} className="px-2">
-                <h3 className="text-[9px] font-black text-slate-300 uppercase tracking-[0.25em] mb-4 ml-4">{group.title}</h3>
-                <nav className="space-y-1.5">
-                  {group.items.map((item, idx) => (
-                    <motion.button
-                      key={item.id}
-                      initial={{ opacity: 0, x: -20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ 
-                        delay: (groupIdx * 10 + idx) * 0.03,
-                        type: "spring",
-                        stiffness: 260,
-                        damping: 20 
-                      }}
-                      whileHover={{ x: 8 }}
-                      whileTap={{ scale: 0.98 }}
-                      onClick={() => setActiveTab(item.id as any)}
-                      className={cn(
-                        "w-full flex items-center gap-4 px-5 py-4 rounded-2xl text-sm font-bold transition-all relative group",
-                        activeTab === item.id 
-                          ? "bg-indigo-600 text-white shadow-xl shadow-indigo-200" 
-                          : "text-slate-500 hover:bg-slate-50 hover:text-indigo-600"
-                      )}
-                    >
-                      <item.icon className={cn("w-5 h-5 transition-transform duration-500 group-hover:rotate-12", activeTab === item.id ? "text-white" : "text-slate-400 group-hover:text-indigo-600")} />
-                      <span className="truncate">{item.label}</span>
-                      {activeTab === item.id && (
-                        <motion.div 
-                          layoutId="active-tab" 
-                          className="absolute left-[-1.5rem] w-1.5 h-6 bg-indigo-600 rounded-r-full"
-                          transition={{ type: "spring", stiffness: 300, damping: 30 }}
-                        />
-                      )}
-                    </motion.button>
-                  ))}
-                </nav>
+    <div className="space-y-8 animate-fade-in">
+      {/* Mobile Horizontal Scrolling Sticky Navigation */}
+      <div className="lg:hidden sticky top-0 z-30 -mx-4 px-4 py-3 bg-slate-50/95 backdrop-blur-md border-b border-slate-200/20 flex items-center gap-2 overflow-x-auto scrollbar-none shadow-sm">
+        {navGroups.flatMap(g => g.items).map((item) => {
+          const Icon = item.icon;
+          const isActive = activeTab === item.id;
+          return (
+            <button
+              key={item.id}
+              onClick={() => setActiveTab(item.id as any)}
+              className={cn(
+                "flex items-center gap-2 px-4 py-2.5 rounded-full text-xs font-bold whitespace-nowrap transition-all duration-200 cursor-pointer active:scale-95",
+                isActive 
+                  ? "bg-indigo-600 text-white shadow-md shadow-indigo-100" 
+                  : "bg-white text-slate-600 hover:bg-slate-100 hover:text-indigo-600 shadow-sm border border-slate-100"
+              )}
+            >
+              <Icon className={cn("w-3.5 h-3.5", isActive ? "text-white" : "text-slate-400")} />
+              <span>{item.label}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Main Grid: Sidebar + Current Content Area */}
+      <div className="flex flex-col lg:flex-row gap-10">
+        {/* Sidebar Navigation - Hidden on mobile, shown on lg screens */}
+        <aside className="hidden lg:block lg:w-72 shrink-0">
+          <div className="sticky top-10 space-y-8">
+            <div className="bg-white rounded-[2rem] border border-slate-100 shadow-soft p-4 space-y-6">
+              {navGroups.map((group, groupIdx) => (
+                <div key={group.title} className="space-y-3">
+                  <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] px-3">{group.title}</h3>
+                  <nav className="space-y-1">
+                    {group.items.map((item) => {
+                      const Icon = item.icon;
+                      const isActive = activeTab === item.id;
+                      return (
+                        <button
+                          key={item.id}
+                          onClick={() => setActiveTab(item.id as any)}
+                          className={cn(
+                            "w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-xs font-bold transition-all relative group cursor-pointer",
+                            isActive 
+                              ? "bg-indigo-50 text-indigo-700 font-extrabold" 
+                              : "text-slate-600 hover:bg-slate-50 hover:text-indigo-600"
+                          )}
+                        >
+                          {isActive && (
+                            <motion.div 
+                              layoutId="active-sidebar-indicator" 
+                              className="absolute left-0 top-2 bottom-2 w-1 bg-indigo-600 rounded-r-md"
+                              transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                            />
+                          )}
+                          <Icon className={cn("w-4 h-4 transition-transform group-hover:scale-110", isActive ? "text-indigo-600" : "text-slate-400 group-hover:text-indigo-500")} />
+                          <span className="truncate">{item.label}</span>
+                        </button>
+                      );
+                    })}
+                  </nav>
+                  {groupIdx < navGroups.length - 1 && (
+                    <hr className="border-slate-100/80 my-2 mx-2" />
+                  )}
+                </div>
+              ))}
+            </div>
+            
+            {/* User Profile Card */}
+            <div className="p-6 bg-slate-900 rounded-[2rem] text-white relative overflow-hidden group">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/10 rounded-full -mr-16 -mt-16 blur-2xl group-hover:bg-indigo-500/20 transition-all duration-700" />
+              <div className="relative z-10 space-y-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-indigo-500 flex items-center justify-center text-sm font-black text-white shadow-lg shadow-indigo-500/20">
+                    {user?.displayName ? user.displayName[0] : 'T'}
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-black text-indigo-300 uppercase tracking-widest leading-none">Connecté</p>
+                    <p className="text-xs font-bold text-slate-400 mt-1 truncate max-w-[140px]">{user?.email}</p>
+                  </div>
+                </div>
+                <Button size="sm" className="w-full bg-white/10 hover:bg-white/20 text-white border-none py-3 text-[10px] font-black uppercase tracking-wider transition-colors cursor-pointer" onClick={() => api.auth.logout().then(() => window.location.reload())}>
+                  Déconnexion
+                </Button>
               </div>
-            ))}
-          </div>
-          
-          {/* User Profile Card */}
-          <div className="p-6 bg-slate-900 rounded-[2.5rem] text-white relative overflow-hidden group">
-            <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/10 rounded-full -mr-16 -mt-16 blur-2xl group-hover:bg-indigo-500/20 transition-all duration-700" />
-            <div className="relative z-10 space-y-4">
-              <div className="w-12 h-12 rounded-2xl bg-indigo-500 flex items-center justify-center text-xl font-black">
-                {user?.displayName ? user.displayName[0] : 'T'}
-              </div>
-              <div>
-                <p className="text-xs font-black text-indigo-300 uppercase tracking-widest mb-1">Enseignant</p>
-                <p className="font-bold truncate">{user?.displayName || 'Enseignant'}</p>
-              </div>
-              <Button size="sm" className="w-full bg-white/10 hover:bg-white/20 text-white border-none py-4 text-xs font-black" onClick={() => api.auth.logout().then(() => window.location.reload())}>
-                Déconnexion
-              </Button>
             </div>
           </div>
-        </div>
-      </aside>
+        </aside>
 
-      {/* Main Content Area */}
-      <main className="flex-1 min-w-0">
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={activeTab}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            transition={{ duration: 0.3 }}
-          >
+        {/* Main Content Area */}
+        <main className="flex-1 min-w-0">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={activeTab}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.3 }}
+            >
             {activeTab === 'overview' && (
               <StatisticsTab
                 user={user}
@@ -1862,5 +1903,6 @@ export const TeacherDashboard = ({
         )}
       </div>
     </div>
-  );
+  </div>
+);
 };
