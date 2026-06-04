@@ -4,7 +4,7 @@ import {
   Clock, CheckCircle2, Send, AlertCircle, ArrowRight, ClipboardList, 
   Sparkles, ArrowUp, ArrowDown, GripVertical, Timer, ChevronLeft, ChevronRight,
   Info, Star, ShieldAlert, Wifi, WifiOff, NotebookPen, Volume2, VolumeX, Calculator, X,
-  Award, Download, Printer
+  Award, Download, Printer, Scissors, Layers
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { motion, AnimatePresence } from 'motion/react';
@@ -606,7 +606,7 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
   const [showFullscreenWarningModal, setShowFullscreenWarningModal] = useState(false);
   const [showTabExitWarningModal, setShowTabExitWarningModal] = useState(false);
   const [needsFullscreenRestore, setNeedsFullscreenRestore] = useState(() => {
-    if (!exam.disableCopyPaste) return false;
+    if (!exam.forceFullscreen) return false;
     const started = !!localStorage.getItem(`exam_start_${exam.id}_${user.id}`);
     if (!started) return false;
     
@@ -632,13 +632,15 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
 
   // Automatically reset all active anti-cheat/lock states and warning modals if the teacher deactivates anti-cheat in real-time
   useEffect(() => {
-    if (!exam.disableCopyPaste) {
+    if (!exam.forceFullscreen) {
       setNeedsFullscreenRestore(false);
       setIsPausedByFullscreen(false);
       setShowFullscreenWarningModal(false);
+    }
+    if (!exam.detectTabExits) {
       setShowTabExitWarningModal(false);
     }
-  }, [exam.disableCopyPaste]);
+  }, [exam.forceFullscreen, exam.detectTabExits]);
 
   // Load and restore of state from IndexedDB in case of local cache wipes / browser restarts
   useEffect(() => {
@@ -777,7 +779,7 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
 
   // Fullscreen Change Listener & Warnings
   useEffect(() => {
-    if (!exam.disableCopyPaste || !hasStarted || showCompletion || isSubmitting || isFullscreenUnsupported) return;
+    if (!exam.forceFullscreen || !hasStarted || showCompletion || isSubmitting || isFullscreenUnsupported) return;
 
     const handleFullscreenChange = () => {
       const isFull = !!(
@@ -856,7 +858,7 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
       document.removeEventListener('mozfullscreenchange', handleFullscreenChange);
       document.removeEventListener('MSFullscreenChange', handleFullscreenChange);
     };
-  }, [hasStarted, showCompletion, isSubmitting, exam.id, user.id, user.displayName, user.registrationNumber, isFullscreenUnsupported, exam.disableCopyPaste]);
+  }, [hasStarted, showCompletion, isSubmitting, exam.id, user.id, user.displayName, user.registrationNumber, isFullscreenUnsupported, exam.forceFullscreen]);
 
   // Synchroniser la progression de l'étudiant via Socket.io
   useEffect(() => {
@@ -1231,7 +1233,7 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
 
   // Tab Visibility Monitoring & Blur Cheat Detection
   useEffect(() => {
-    if (!exam.disableCopyPaste || !hasStarted || showCompletion || isSubmitting) return;
+    if (!exam.detectTabExits || !hasStarted || showCompletion || isSubmitting) return;
 
     const triggerCheatAlert = (type: string, details: string) => {
       logCheatAlert(type, details);
@@ -1274,7 +1276,7 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [hasStarted, showCompletion, isSubmitting, exam.id, user.id, user.displayName, user.registrationNumber, handleSubmit, exam.disableCopyPaste]);
+  }, [hasStarted, showCompletion, isSubmitting, exam.id, user.id, user.displayName, user.registrationNumber, handleSubmit, exam.detectTabExits]);
 
   // Écouter les commandes distantes d'un enseignant (arrêt forcé, rallonge de temps, autorisation)
   useEffect(() => {
@@ -1370,7 +1372,7 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
     const now = Date.now();
     localStorage.setItem(`exam_start_${exam.id}_${user.id}`, now.toString());
     setHasStarted(true);
-    if (exam.disableCopyPaste) {
+    if (exam.forceFullscreen) {
       const success = await enterFullscreen();
       if (!success) {
         setIsFullscreenUnsupported(true);
@@ -1482,8 +1484,18 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
                 <h2 className="text-4xl md:text-6xl font-black text-slate-900 leading-tight tracking-tight uppercase font-display italic">{exam.title}</h2>
                 <div className="flex flex-wrap justify-center gap-3">
                    {exam.disableCopyPaste && (
-                     <div className="flex items-center gap-2 px-4 py-2 bg-rose-50 border border-rose-100 rounded-xl text-xs font-bold text-rose-600 animate-pulse">
-                       <ShieldAlert className="w-4 h-4" /> Sécurisé (Anti-Copie)
+                     <div className="flex items-center gap-2 px-4 py-2 bg-indigo-50 border border-indigo-100 rounded-xl text-xs font-semibold text-indigo-600">
+                       <Scissors className="w-4 h-4" /> Anti-Copie
+                     </div>
+                   )}
+                   {exam.forceFullscreen && (
+                     <div className="flex items-center gap-2 px-4 py-2 bg-rose-50 border border-rose-100 rounded-xl text-xs font-semibold text-rose-600 animate-pulse">
+                       <Layers className="w-4 h-4" /> Plein Écran Exigé
+                     </div>
+                   )}
+                   {exam.detectTabExits && (
+                     <div className="flex items-center gap-2 px-4 py-2 bg-rose-50 border border-rose-100 rounded-xl text-xs font-semibold text-rose-600">
+                       <ShieldAlert className="w-4 h-4" /> Sortie surveillée
                      </div>
                    )}
                    <div className="flex items-center gap-2 px-4 py-2 bg-slate-50 border border-slate-100 rounded-xl text-xs font-bold text-slate-500">
@@ -1610,10 +1622,10 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
           )}
         </div>
       </div>
-      {exam.disableCopyPaste && (
+      {(exam.disableCopyPaste || exam.forceFullscreen || exam.detectTabExits) && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[60] pointer-events-none">
           <div className="bg-rose-600/90 text-white px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-[0.2em] shadow-lg flex items-center gap-2 backdrop-blur-sm">
-            <ShieldAlert className="w-4 h-4" /> Mode Protégé : Copie interdite
+            <ShieldAlert className="w-4 h-4 animate-pulse" /> ÉVALUATION PROTÉGÉE SÉCURISÉE
           </div>
         </div>
       )}

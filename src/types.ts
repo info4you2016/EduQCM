@@ -83,6 +83,8 @@ export interface Exam {
   durationMinutes: number;
   shuffleQuestions?: boolean;
   disableCopyPaste?: boolean; // Added
+  forceFullscreen?: boolean; // Added
+  detectTabExits?: boolean; // Added
   scheduledAt?: string;
   status: 'draft' | 'active';
   groupId?: number;
@@ -170,6 +172,8 @@ export interface DefaultExamSettings {
   durationMinutes: number;
   shuffleQuestions: boolean;
   disableCopyPaste: boolean;
+  forceFullscreen?: boolean;
+  detectTabExits?: boolean;
 }
 
 export interface WordTemplate {

@@ -1481,7 +1481,7 @@ export function OrganizationSettingsView({ onUpdate }: OrganizationSettingsViewP
                       <div className="w-8 h-8 rounded-lg bg-rose-100 flex items-center justify-center">
                         <ShieldAlert className="w-4 h-4 text-rose-600" />
                       </div>
-                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-tight">Verrouillage de l'appareil</label>
+                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-tight">Bloquer Copier-Coller par Défaut</label>
                     </div>
                     <div className="flex items-center gap-3 h-[42px]">
                       <label className="relative inline-flex items-center cursor-pointer">
@@ -1498,11 +1498,67 @@ export function OrganizationSettingsView({ onUpdate }: OrganizationSettingsViewP
                           className="sr-only peer" 
                         />
                         <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-rose-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-rose-500"></div>
-                        <span className="ml-3 text-xs font-bold text-slate-600">{settings.defaultExamSettings?.disableCopyPaste ?? false ? 'Sécurisé (SEB Mode)' : 'Standard'}</span>
+                        <span className="ml-3 text-xs font-bold text-slate-600">{settings.defaultExamSettings?.disableCopyPaste ?? false ? 'Bloqué' : 'Autorisé'}</span>
                       </label>
                     </div>
-                    <p className="text-[9px] text-slate-400 font-medium">Safe Exam Browser Mode : force le plein écran, bloque les copier-coller et soumet la copie après 3 sorties d'onglet.</p>
-                 </div>
+                    <p className="text-[9px] text-slate-400 font-medium">Empêche l'utilisation du copier-coller, du couper et du clic droit par défaut lors d'un examen.</p>
+                  </div>
+
+                  <div className="p-5 rounded-2xl border-2 border-slate-50 bg-slate-50/30 space-y-4">
+                     <div className="flex items-center gap-3 mb-1">
+                       <div className="w-8 h-8 rounded-lg bg-orange-100 flex items-center justify-center">
+                         <ShieldAlert className="w-4 h-4 text-orange-600" />
+                       </div>
+                       <label className="text-[10px] font-black text-slate-500 uppercase tracking-tight">Forcer le Plein Écran par Défaut</label>
+                     </div>
+                     <div className="flex items-center gap-3 h-[42px]">
+                       <label className="relative inline-flex items-center cursor-pointer">
+                         <input 
+                           type="checkbox" 
+                           checked={settings.defaultExamSettings?.forceFullscreen ?? false} 
+                           onChange={(e) => setSettings({
+                             ...settings,
+                             defaultExamSettings: {
+                               ...(settings.defaultExamSettings || { durationMinutes: 60, shuffleQuestions: true, disableCopyPaste: false, forceFullscreen: false, detectTabExits: false }),
+                               forceFullscreen: e.target.checked
+                             }
+                           })}
+                           className="sr-only peer" 
+                         />
+                         <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-orange-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-orange-500"></div>
+                         <span className="ml-3 text-xs font-bold text-slate-600">{settings.defaultExamSettings?.forceFullscreen ?? false ? 'Activé' : 'Désactivé'}</span>
+                       </label>
+                     </div>
+                     <p className="text-[9px] text-slate-400 font-medium">Exige que l'étudiant commence l'examen en plein écran par défaut.</p>
+                  </div>
+
+                  <div className="p-5 rounded-2xl border-2 border-slate-50 bg-slate-50/30 space-y-4">
+                     <div className="flex items-center gap-3 mb-1">
+                       <div className="w-8 h-8 rounded-lg bg-rose-100 flex items-center justify-center">
+                         <ShieldAlert className="w-4 h-4 text-rose-600" />
+                       </div>
+                       <label className="text-[10px] font-black text-slate-500 uppercase tracking-tight">Suivre les Sorties d'Onglet par Défaut</label>
+                     </div>
+                     <div className="flex items-center gap-3 h-[42px]">
+                       <label className="relative inline-flex items-center cursor-pointer">
+                         <input 
+                           type="checkbox" 
+                           checked={settings.defaultExamSettings?.detectTabExits ?? false} 
+                           onChange={(e) => setSettings({
+                             ...settings,
+                             defaultExamSettings: {
+                               ...(settings.defaultExamSettings || { durationMinutes: 60, shuffleQuestions: true, disableCopyPaste: false, forceFullscreen: false, detectTabExits: false }),
+                               detectTabExits: e.target.checked
+                             }
+                           })}
+                           className="sr-only peer" 
+                         />
+                         <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-rose-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-rose-500"></div>
+                         <span className="ml-3 text-xs font-bold text-slate-600">{settings.defaultExamSettings?.detectTabExits ?? false ? 'Activé' : 'Désactivé'}</span>
+                       </label>
+                     </div>
+                     <p className="text-[9px] text-slate-400 font-medium">Détecte et consigne chaque changement d'onglet ou reprise de focus.</p>
+                  </div>
                </div>
             </div>
 

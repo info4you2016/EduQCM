@@ -236,6 +236,8 @@ function runAllDatabaseMigrations() {
       groupId INTEGER,
       shuffleQuestions INTEGER DEFAULT 0,
       disableCopyPaste INTEGER DEFAULT 0,
+      forceFullscreen INTEGER DEFAULT 0,
+      detectTabExits INTEGER DEFAULT 0,
       createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(moduleId) REFERENCES modules(id),
       FOREIGN KEY(teacherId) REFERENCES users(id),
@@ -371,6 +373,8 @@ function runAllDatabaseMigrations() {
   try { db.exec("ALTER TABLE exams ADD COLUMN scheduledAt DATETIME"); } catch (e) {}
   try { db.exec("ALTER TABLE exams ADD COLUMN shuffleQuestions INTEGER DEFAULT 0"); } catch (e) {}
   try { db.exec("ALTER TABLE exams ADD COLUMN disableCopyPaste INTEGER DEFAULT 0"); } catch (e) {}
+  try { db.exec("ALTER TABLE exams ADD COLUMN forceFullscreen INTEGER DEFAULT 0"); } catch (e) {}
+  try { db.exec("ALTER TABLE exams ADD COLUMN detectTabExits INTEGER DEFAULT 0"); } catch (e) {}
   try { db.exec("ALTER TABLE filieres ADD COLUMN code TEXT"); } catch (e) {}
   try { db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_filieres_code ON filieres(code)"); } catch (e) {}
   try { db.exec("ALTER TABLE filieres ADD COLUMN description TEXT"); } catch (e) {}
@@ -528,6 +532,8 @@ try {
             groupId INTEGER,
             shuffleQuestions INTEGER DEFAULT 0,
             disableCopyPaste INTEGER DEFAULT 0,
+            forceFullscreen INTEGER DEFAULT 0,
+            detectTabExits INTEGER DEFAULT 0,
             createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(moduleId) REFERENCES modules(id),
             FOREIGN KEY(teacherId) REFERENCES users(id),
@@ -1709,7 +1715,9 @@ Instructions pour le feedback :
       questions: JSON.parse(e.questions),
       hasResults: e.resultsCount > 0,
       shuffleQuestions: e.shuffleQuestions === 1,
-      disableCopyPaste: e.disableCopyPaste === 1
+      disableCopyPaste: e.disableCopyPaste === 1,
+      forceFullscreen: e.forceFullscreen === 1,
+      detectTabExits: e.detectTabExits === 1
     }));
     cacheManager.set(cacheKey, parsedExams, 300);
     res.json(parsedExams);
@@ -1718,7 +1726,7 @@ Instructions pour le feedback :
   app.post("/api/exams", authenticate, (req: any, res) => {
     if (req.user.role === 'student') return res.status(403).json({ error: "Forbidden" });
     try {
-      const { title, description, moduleId, type, durationMinutes, questions, scheduledAt, shuffleQuestions, disableCopyPaste } = req.body;
+      const { title, description, moduleId, type, durationMinutes, questions, scheduledAt, shuffleQuestions, disableCopyPaste, forceFullscreen, detectTabExits } = req.body;
       
       console.log("Creating exam with data:", { title, moduleId, type, teacherId: req.user.id });
 
@@ -1739,7 +1747,7 @@ Instructions pour le feedback :
         return res.status(400).json({ error: "Utilisateur non trouvé." });
       }
 
-      const stmt = db.prepare("INSERT INTO exams (title, description, moduleId, type, teacherId, durationMinutes, questions, scheduledAt, status, shuffleQuestions, disableCopyPaste) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)");
+      const stmt = db.prepare("INSERT INTO exams (title, description, moduleId, type, teacherId, durationMinutes, questions, scheduledAt, status, shuffleQuestions, disableCopyPaste, forceFullscreen, detectTabExits) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?)");
       const result = stmt.run(
         title, 
         description, 
@@ -1750,7 +1758,9 @@ Instructions pour le feedback :
         JSON.stringify(questions), 
         scheduledAt, 
         shuffleQuestions ? 1 : 0, 
-        disableCopyPaste ? 1 : 0
+        disableCopyPaste ? 1 : 0,
+        forceFullscreen ? 1 : 0,
+        detectTabExits ? 1 : 0
       );
       clearCache('exams');
       res.json({ 
@@ -1765,7 +1775,9 @@ Instructions pour le feedback :
         scheduledAt, 
         status: 'draft',
         shuffleQuestions: !!shuffleQuestions,
-        disableCopyPaste: !!disableCopyPaste
+        disableCopyPaste: !!disableCopyPaste,
+        forceFullscreen: !!forceFullscreen,
+        detectTabExits: !!detectTabExits
       });
     } catch (err: any) {
       console.error("Error creating exam:", err);
@@ -1896,7 +1908,7 @@ Instructions pour le feedback :
     const { id } = req.params;
     
     try {
-      const { title, description, moduleId, type, durationMinutes, questions, scheduledAt, shuffleQuestions, disableCopyPaste } = req.body;
+      const { title, description, moduleId, type, durationMinutes, questions, scheduledAt, shuffleQuestions, disableCopyPaste, forceFullscreen, detectTabExits } = req.body;
       
       console.log(`Updating exam ${id} with data:`, { title, moduleId, type, teacherId: req.user.id });
 
@@ -1923,7 +1935,7 @@ Instructions pour le feedback :
         return res.status(400).json({ error: "Utilisateur non trouvé." });
       }
 
-      const stmt = db.prepare("UPDATE exams SET title = ?, description = ?, moduleId = ?, type = ?, durationMinutes = ?, questions = ?, scheduledAt = ?, shuffleQuestions = ?, disableCopyPaste = ? WHERE id = ? AND teacherId = ?");
+      const stmt = db.prepare("UPDATE exams SET title = ?, description = ?, moduleId = ?, type = ?, durationMinutes = ?, questions = ?, scheduledAt = ?, shuffleQuestions = ?, disableCopyPaste = ?, forceFullscreen = ?, detectTabExits = ? WHERE id = ? AND teacherId = ?");
       const result = stmt.run(
         title, 
         description, 
@@ -1934,6 +1946,8 @@ Instructions pour le feedback :
         scheduledAt, 
         shuffleQuestions ? 1 : 0, 
         disableCopyPaste ? 1 : 0, 
+        forceFullscreen ? 1 : 0,
+        detectTabExits ? 1 : 0,
         id, 
         req.user.id
       );
@@ -1951,7 +1965,9 @@ Instructions pour le feedback :
         questions, 
         scheduledAt,
         shuffleQuestions: !!shuffleQuestions,
-        disableCopyPaste: !!disableCopyPaste
+        disableCopyPaste: !!disableCopyPaste,
+        forceFullscreen: !!forceFullscreen,
+        detectTabExits: !!detectTabExits
       });
     } catch (err: any) {
       console.error("Error updating exam:", err);
@@ -3111,7 +3127,9 @@ Instructions pour le feedback :
           groupId: e.groupId || null,
           createdAt: e.createdAt,
           shuffleQuestions: e.shuffleQuestions === 1,
-          disableCopyPaste: e.disableCopyPaste === 1
+          disableCopyPaste: e.disableCopyPaste === 1,
+          forceFullscreen: e.forceFullscreen === 1,
+          detectTabExits: e.detectTabExits === 1
         }));
 
         const questions: any[] = [];
