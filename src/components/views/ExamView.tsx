@@ -1231,52 +1231,11 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
     }
   }, [answers, questions, exam, onComplete, isSubmitting, showCompletion, user.id]);
 
-  // Tab Visibility Monitoring & Blur Cheat Detection
+  // Tab Visibility Monitoring & Blur Cheat Detection (Disabled at user's request)
   useEffect(() => {
-    if (!exam.detectTabExits || !hasStarted || showCompletion || isSubmitting) return;
-
-    const triggerCheatAlert = (type: string, details: string) => {
-      logCheatAlert(type, details);
-      socket.emit('exam:cheat-alert', {
-        examId: exam.id,
-        studentId: user.id,
-        studentName: user.displayName,
-        registrationNumber: user.registrationNumber || '-',
-        type,
-        details,
-        timestamp: Date.now()
-      });
-    };
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'hidden') {
-        if (tabExitStartTimeRef.current === null) {
-          tabExitStartTimeRef.current = Date.now();
-        }
-
-        setTabExitCount(prev => {
-          const nextCount = prev + 1;
-          localStorage.setItem(`exam_tab_exits_${exam.id}_${user.id}`, nextCount.toString());
-          triggerCheatAlert('tab-exit', "Sortie d'écran (Alt+Tab ou réduction)");
-          setShowTabExitWarningModal(true);
-          return nextCount;
-        });
-      } else if (document.visibilityState === 'visible') {
-        if (tabExitStartTimeRef.current !== null) {
-          const durationSec = Math.round((Date.now() - tabExitStartTimeRef.current) / 1000);
-          tabExitStartTimeRef.current = null;
-
-          const exactTime = new Date().toLocaleTimeString('fr-FR');
-          triggerCheatAlert('tab-return', `Retour sur l'onglet d'examen à ${exactTime} (Changement d'onglet / écran d'examen inactif pendant ${durationSec} secondes)`);
-        }
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [hasStarted, showCompletion, isSubmitting, exam.id, user.id, user.displayName, user.registrationNumber, handleSubmit, exam.detectTabExits]);
+    // Tab exit surveillance is fully disabled
+    return;
+  }, []);
 
   // Écouter les commandes distantes d'un enseignant (arrêt forcé, rallonge de temps, autorisation)
   useEffect(() => {
