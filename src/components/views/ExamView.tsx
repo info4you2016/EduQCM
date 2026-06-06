@@ -1452,11 +1452,7 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
                        <Layers className="w-4 h-4" /> Plein Écran Exigé
                      </div>
                    )}
-                   {exam.detectTabExits && (
-                     <div className="flex items-center gap-2 px-4 py-2 bg-rose-50 border border-rose-100 rounded-xl text-xs font-semibold text-rose-600">
-                       <ShieldAlert className="w-4 h-4" /> Sortie surveillée
-                     </div>
-                   )}
+
                    <div className="flex items-center gap-2 px-4 py-2 bg-slate-50 border border-slate-100 rounded-xl text-xs font-bold text-slate-500">
                      <Clock className="w-4 h-4" /> {formatDuration(exam.durationMinutes)}
                    </div>
@@ -1581,7 +1577,7 @@ export const ExamView = ({ exam, onComplete, onCancel, user, moduleName }: ExamV
           )}
         </div>
       </div>
-      {(exam.disableCopyPaste || exam.forceFullscreen || exam.detectTabExits) && (
+      {(exam.disableCopyPaste || exam.forceFullscreen) && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[60] pointer-events-none">
           <div className="bg-rose-600/90 text-white px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-[0.2em] shadow-lg flex items-center gap-2 backdrop-blur-sm">
             <ShieldAlert className="w-4 h-4 animate-pulse" /> ÉVALUATION PROTÉGÉE SÉCURISÉE

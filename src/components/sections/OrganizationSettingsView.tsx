@@ -1532,32 +1532,17 @@ export function OrganizationSettingsView({ onUpdate }: OrganizationSettingsViewP
                      <p className="text-[9px] text-slate-400 font-medium">Exige que l'étudiant commence l'examen en plein écran par défaut.</p>
                   </div>
 
-                  <div className="p-5 rounded-2xl border-2 border-slate-50 bg-slate-50/30 space-y-4">
+                  <div className="p-5 rounded-2xl border-2 border-slate-50 bg-slate-50/10 opacity-60 space-y-4">
                      <div className="flex items-center gap-3 mb-1">
-                       <div className="w-8 h-8 rounded-lg bg-rose-100 flex items-center justify-center">
-                         <ShieldAlert className="w-4 h-4 text-rose-600" />
+                       <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center">
+                         <ShieldAlert className="w-4 h-4 text-slate-400" />
                        </div>
-                       <label className="text-[10px] font-black text-slate-500 uppercase tracking-tight">Suivre les Sorties d'Onglet par Défaut</label>
+                       <label className="text-[10px] font-black text-slate-400 uppercase tracking-tight line-through">Suivre les Sorties d'Onglet par Défaut</label>
                      </div>
                      <div className="flex items-center gap-3 h-[42px]">
-                       <label className="relative inline-flex items-center cursor-pointer">
-                         <input 
-                           type="checkbox" 
-                           checked={settings.defaultExamSettings?.detectTabExits ?? false} 
-                           onChange={(e) => setSettings({
-                             ...settings,
-                             defaultExamSettings: {
-                               ...(settings.defaultExamSettings || { durationMinutes: 60, shuffleQuestions: true, disableCopyPaste: false, forceFullscreen: false, detectTabExits: false }),
-                               detectTabExits: e.target.checked
-                             }
-                           })}
-                           className="sr-only peer" 
-                         />
-                         <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-rose-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-rose-500"></div>
-                         <span className="ml-3 text-xs font-bold text-slate-600">{settings.defaultExamSettings?.detectTabExits ?? false ? 'Activé' : 'Désactivé'}</span>
-                       </label>
+                       <span className="px-2 py-1 bg-slate-200/50 text-slate-500 rounded text-[9px] font-black uppercase tracking-wider">Option inefficace</span>
                      </div>
-                     <p className="text-[9px] text-slate-400 font-medium">Détecte et consigne chaque changement d'onglet ou reprise de focus.</p>
+                     <p className="text-[9px] text-slate-400 font-medium">Détecte et consigne chaque changement d'onglet ou reprise de focus. (Actuellement désactivé globalement sur la plateforme).</p>
                   </div>
                </div>
             </div>

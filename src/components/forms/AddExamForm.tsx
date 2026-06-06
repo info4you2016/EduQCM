@@ -999,36 +999,24 @@ export const AddExamForm = ({ modules, onComplete, user, initialData }: AddExamF
                 </div>
 
                 {/* 3. Détecter les changements d'onglet */}
-                <div className={`flex flex-col justify-between p-5 rounded-2xl border-2 transition-all ${
-                  detectTabExits 
-                    ? 'border-rose-500 bg-rose-50/10 shadow-sm' 
-                    : 'border-slate-100 bg-white hover:border-slate-200'
-                }`}>
+                <div className="flex flex-col justify-between p-5 rounded-2xl border-2 border-slate-100 bg-slate-50/50 opacity-60">
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
-                      <div className="w-10 h-10 rounded-xl bg-indigo-50 flex items-center justify-center text-indigo-600">
+                      <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center text-slate-400">
                         <ShieldAlert className="w-5 h-5" />
                       </div>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                        <input 
-                          type="checkbox" 
-                          checked={detectTabExits} 
-                          onChange={(e) => setDetectTabExits(e.target.checked)}
-                          className="sr-only peer" 
-                        />
-                        <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600 font-black"></div>
-                      </label>
+                      <span className="px-2 py-1 bg-slate-200/50 text-slate-500 rounded text-[9px] font-black uppercase tracking-wider">Option inactive</span>
                     </div>
                     <div>
-                      <h4 className="text-sm font-black text-slate-900">Détecter les Sorties d'Onglet</h4>
-                      <p className="text-xs text-slate-500 font-semibold leading-relaxed mt-1">
-                        Surveille si l'élève change d'onglet ou d'application et déclenche des alertes en temps réel sur la supervision de l'enseignant.
+                      <h4 className="text-sm font-black text-slate-400 line-through">Détecter les Sorties d'Onglet</h4>
+                      <p className="text-xs text-slate-400 font-semibold leading-relaxed mt-1">
+                        Surveille si l'élève change d'onglet ou d'application et déclenche des alertes. (Cette option de surveillance est actuellement désactivée).
                       </p>
                     </div>
                   </div>
-                  <div className="mt-4 pt-3 border-t border-slate-100 flex items-center gap-2">
-                    <span className={`text-[10px] font-black uppercase tracking-wider ${detectTabExits ? 'text-rose-600' : 'text-slate-400'}`}>
-                      {detectTabExits ? 'Activé' : 'Désactivé'}
+                  <div className="mt-4 pt-3 border-t border-slate-200/50 flex items-center gap-2">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">
+                      Désactivé
                     </span>
                   </div>
                 </div>
