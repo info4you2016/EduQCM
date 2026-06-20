@@ -9,6 +9,7 @@ import {
   Image as ImageIcon, Columns as ColumnsIcon, Layout as LayoutIcon, AlignLeft, AlignCenter, AlignRight, Clock 
 } from 'lucide-react';
 import { Button } from '../ui/Button';
+import { useConfirm } from '../ui/ConfirmDialog';
 import { getLineImageUrl } from '../../lib/utils';
 
 const HEADER_PRESETS = [
@@ -129,7 +130,8 @@ interface OrganizationSettingsViewProps {
 }
 
 export function OrganizationSettingsView({ onUpdate }: OrganizationSettingsViewProps) {
-  const [activeTab, setActiveTab] = useState<'general' | 'header' | 'footer' | 'acad' | 'extra'>('general');
+  const confirm = useConfirm();
+  const [activeTab, setActiveTab] = useState<'general' | 'templates' | 'header' | 'footer' | 'acad' | 'extra'>('general');
   const [settings, setSettings] = useState<OrganizationSettings>({
     orgName: 'OFPPT',
     orgNameArabic: 'مكتب التكوين المهني وإنعاش الشغل',
@@ -371,6 +373,7 @@ export function OrganizationSettingsView({ onUpdate }: OrganizationSettingsViewP
   };
 
   const saveAsTemplate = async () => {
+    setActiveTab('templates');
     setIsAddingNewTemplate(true);
     setNewTemplateName(`Modèle ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}`);
   };
@@ -462,7 +465,14 @@ export function OrganizationSettingsView({ onUpdate }: OrganizationSettingsViewP
     const template = (settings.templates || []).find(t => t.id === id);
     if (!template) return;
     
-    if (!confirm(`Souhaitez-vous mettre à jour le modèle "${template.name}" avec les paramètres d'en-tête actuels ?`)) return;
+    const ok = await confirm({
+      title: "Mettre à jour le modèle",
+      message: `Souhaitez-vous mettre à jour le modèle "${template.name}" avec les paramètres d'en-tête actuels ?`,
+      confirmLabel: "Mettre à jour",
+      cancelLabel: "Annuler",
+      variant: "primary"
+    });
+    if (!ok) return;
 
     const updatedTemplates = (settings.templates || []).map(t => t.id === id ? {
       ...t,
@@ -528,7 +538,14 @@ export function OrganizationSettingsView({ onUpdate }: OrganizationSettingsViewP
     const template = (settings.templates || []).find(t => t.id === id);
     if (!template) return;
 
-    if (!confirm(`Souhaitez-vous vraiment supprimer le modèle "${template.name}" ?`)) return;
+    const ok = await confirm({
+      title: "Supprimer le modèle",
+      message: `Souhaitez-vous vraiment supprimer le modèle "${template.name}" ?`,
+      confirmLabel: "Supprimer",
+      cancelLabel: "Annuler",
+      variant: "danger"
+    });
+    if (!ok) return;
 
     const updatedSettings = {
       ...settings,
@@ -934,6 +951,7 @@ export function OrganizationSettingsView({ onUpdate }: OrganizationSettingsViewP
       <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-2xl w-fit">
         {[
           { id: 'general', label: 'Général', icon: Building2 },
+          { id: 'templates', label: 'Modèles', icon: Palette },
           { id: 'header', label: 'En-tête', icon: LayoutIcon },
           { id: 'footer', label: 'Pied de page', icon: ColumnsIcon },
           { id: 'acad', label: 'Académique', icon: Timer },
@@ -968,15 +986,111 @@ export function OrganizationSettingsView({ onUpdate }: OrganizationSettingsViewP
                 </div>
                 <div className="p-8 grid grid-cols-1 md:grid-cols-2 gap-8">
                   <div className="space-y-4">
-                    <div className="space-y-1.5">
-                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Nom de l'Institution</label>
-                      <input
-                        type="text"
-                        value={settings.institutionName || ''}
-                        onChange={(e) => setSettings({ ...settings, institutionName: e.target.value })}
-                        className="w-full px-4 py-3 bg-slate-50 border-2 border-transparent focus:border-indigo-500/20 focus:bg-white rounded-2xl text-sm font-bold transition-all outline-none"
-                        placeholder="Ex: ISTA Oued-Zem"
-                      />
+                    <div className="space-y-3 p-4 bg-slate-50 border-2 border-slate-100 rounded-2xl">
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Nom de l'Institution</label>
+                        <select
+                          value={settings.institutionName || ''}
+                          onChange={(e) => {
+                            setSettings({ ...settings, institutionName: e.target.value });
+                          }}
+                          className="w-full px-4 py-3 bg-white border-2 border-slate-200/80 focus:border-indigo-500/20 rounded-xl text-sm font-bold transition-all outline-none"
+                        >
+                          {(!settings.institutions || settings.institutions.length === 0) ? (
+                            settings.institutionName ? (
+                              <option value={settings.institutionName}>{settings.institutionName}</option>
+                            ) : (
+                              <option value="">-- Sélectionnez une institution --</option>
+                            )
+                          ) : (
+                            settings.institutions.map((inst, idx) => (
+                              <option key={idx} value={inst}>{inst}</option>
+                            ))
+                          )}
+                        </select>
+                      </div>
+
+                      <div className="pt-2 border-t border-slate-200/50 space-y-2">
+                        <span className="text-[9px] font-black tracking-wider text-slate-400 uppercase">Gérer la liste déroulante</span>
+                        
+                        <div className="space-y-1 max-h-[140px] overflow-y-auto pr-1">
+                          {(settings.institutions || (settings.institutionName ? [settings.institutionName] : [])).map((inst, idx) => (
+                            <div key={idx} className="flex items-center justify-between bg-white px-3 py-1.5 rounded-xl border border-slate-150 text-xs font-semibold text-slate-700 hover:border-indigo-100 transition-all">
+                              <span className="truncate pr-2">{inst}</span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const currentList = settings.institutions || (settings.institutionName ? [settings.institutionName] : []);
+                                  const updated = currentList.filter((_, i) => i !== idx);
+                                  let nextSelected = settings.institutionName;
+                                  if (settings.institutionName === inst) {
+                                    nextSelected = updated.length > 0 ? updated[0] : '';
+                                  }
+                                  setSettings({
+                                    ...settings,
+                                    institutions: updated,
+                                    institutionName: nextSelected
+                                  });
+                                }}
+                                className="text-rose-500 hover:bg-rose-50 p-1 rounded-lg transition-all"
+                                title="Supprimer de la liste"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+
+                        <div className="flex gap-2 pt-1">
+                          <input
+                            type="text"
+                            placeholder="Nouveau nom..."
+                            id="new-institution-input"
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                const val = (e.currentTarget as HTMLInputElement).value.trim();
+                                if (val) {
+                                  const currentList = settings.institutions || (settings.institutionName ? [settings.institutionName] : []);
+                                  if (!currentList.includes(val)) {
+                                    const updatedList = [...currentList, val];
+                                    setSettings({
+                                      ...settings,
+                                      institutions: updatedList,
+                                      institutionName: settings.institutionName || val
+                                    });
+                                    (e.currentTarget as HTMLInputElement).value = '';
+                                  }
+                                }
+                              }
+                            }}
+                            className="flex-1 px-3 py-1.5 bg-white border-2 border-slate-200 focus:border-indigo-500/20 rounded-xl text-xs font-bold transition-all outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const inputEl = document.getElementById('new-institution-input') as HTMLInputElement;
+                              const val = inputEl?.value.trim();
+                              if (val) {
+                                const currentList = settings.institutions || (settings.institutionName ? [settings.institutionName] : []);
+                                if (!currentList.includes(val)) {
+                                  const updatedList = [...currentList, val];
+                                  setSettings({
+                                    ...settings,
+                                    institutions: updatedList,
+                                    institutionName: settings.institutionName || val
+                                  });
+                                  if (inputEl) inputEl.value = '';
+                                }
+                              }
+                            }}
+                            className="bg-indigo-50 text-indigo-600 hover:bg-indigo-100 px-3 py-1.5 rounded-xl text-xs font-black transition-all flex items-center gap-1"
+                          >
+                            <Plus className="w-3.5 h-3.5 animate-pulse" />
+                            <span>Ajouter</span>
+                          </button>
+                        </div>
+                      </div>
                     </div>
                     <div className="space-y-1.5">
                       <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-right">Nom de l'organisation (Arabe)</label>
@@ -1071,6 +1185,175 @@ export function OrganizationSettingsView({ onUpdate }: OrganizationSettingsViewP
               </div>
             )}
 
+            {/* Templates Tab Content */}
+            {activeTab === 'templates' && (
+              <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+                <div className="p-8 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+                  <div className="flex items-center gap-3">
+                    <Palette className="w-6 h-6 text-indigo-500" />
+                    <h3 className="text-lg font-black text-slate-800 uppercase tracking-tight">Catalogue des Modèles</h3>
+                  </div>
+                </div>
+
+                {/* Presets (Modèles Prédéfinis Prêts à l'Emploi) */}
+                <div className="p-6 bg-indigo-50/15 border-b border-slate-100">
+                   <div className="flex items-center gap-3 mb-4">
+                     <div className="w-1.5 h-4 bg-indigo-600 rounded-full" />
+                     <div>
+                       <h4 className="text-sm font-black text-slate-800 uppercase tracking-tight">✨ Modèles d'En-tête Prédéfinis (Presets)</h4>
+                       <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Sélectionnez un modèle de base officiel pour l'appliquer instantanément</p>
+                     </div>
+                   </div>
+
+                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                     {HEADER_PRESETS.map((preset) => (
+                       <div key={preset.id} className="p-4 rounded-3xl border-2 border-slate-200/85 bg-white hover:border-indigo-500 hover:shadow-soft transition-all flex flex-col justify-between space-y-4">
+                         <div className="space-y-1.5">
+                           <span className="text-xs font-black text-slate-800 block uppercase tracking-tight">{preset.name}</span>
+                           <p className="text-[10px] text-slate-500 font-semibold leading-relaxed line-clamp-3">{preset.description}</p>
+                         </div>
+
+                         {/* Visual column preview indicator */}
+                         <div className="flex gap-1 h-8 bg-slate-50 border border-slate-100/60 p-1 rounded-xl">
+                           {preset.headerColumns.map((col, idx) => (
+                             <div 
+                               key={idx} 
+                               style={{ width: `${col.width}%` }} 
+                               className="h-full bg-indigo-50 border border-indigo-100/50 rounded-lg flex items-center justify-center text-[8px] font-black text-indigo-500/80"
+                               title={`${col.width}% de largeur`}
+                             >
+                               {col.width}%
+                             </div>
+                           ))}
+                         </div>
+
+                         <Button 
+                           type="button" 
+                           variant="outline" 
+                           size="sm" 
+                           className="w-full h-8 text-[9px] font-black uppercase tracking-widest border-indigo-100 text-indigo-600 hover:bg-indigo-50/50 hover:border-indigo-200"
+                           onClick={() => applyPreset(preset)}
+                         >
+                           ⚡ Appliquer ce modèle
+                         </Button>
+                       </div>
+                     ))}
+                   </div>
+                </div>
+
+                {/* Templates Management area */}
+                <div className="p-6 bg-slate-50 border-b border-slate-100">
+                   <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-1 h-3 bg-indigo-500 rounded-full" />
+                          <h4 className="text-sm font-bold text-slate-800 tracking-tight">Catalogue des Modèles d'En-tête</h4>
+                        </div>
+                      {!isAddingNewTemplate && (
+                        <Button type="button" variant="outline" size="sm" onClick={saveAsTemplate} className="h-8 text-[10px] uppercase font-black tracking-widest px-3 border-emerald-100 text-emerald-600 hover:bg-emerald-50">
+                          <Plus className="w-3.5 h-3.5 mr-1.5" /> Nouveau Modèle
+                        </Button>
+                      )}
+                   </div>
+
+                   {isAddingNewTemplate && (
+                     <div className="mb-6 p-4 bg-emerald-50 rounded-2xl border-2 border-emerald-100 animate-in zoom-in-95 duration-300">
+                        <label className="block text-[10px] font-black text-emerald-700 uppercase mb-2 tracking-widest">Nommer votre nouveau modèle</label>
+                        <div className="flex gap-2">
+                           <input 
+                             type="text" 
+                             autoFocus
+                             value={newTemplateName}
+                             onChange={(e) => setNewTemplateName(e.target.value)}
+                             onKeyDown={(e) => e.key === 'Enter' && confirmSaveTemplate()}
+                             className="flex-1 px-4 py-2 bg-white rounded-xl border border-emerald-200 outline-none focus:ring-2 focus:ring-emerald-500 font-bold"
+                             placeholder="Ex: Modèle En-tête Classique"
+                           />
+                           <Button size="sm" onClick={confirmSaveTemplate} className="bg-emerald-600 hover:bg-emerald-700 font-bold">Enregistrer</Button>
+                           <Button size="sm" variant="ghost" onClick={() => { setIsAddingNewTemplate(false); setNewTemplateName(''); }} className="font-bold">Annuler</Button>
+                        </div>
+                     </div>
+                   )}
+
+                   {(settings.templates || []).length > 0 ? (
+                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                       {settings.templates?.map(tpl => (
+                         <div key={tpl.id} className="group p-4 rounded-2xl border-2 border-slate-200 bg-white hover:border-indigo-500 hover:shadow-lg transition-all space-y-3">
+                            <div className="flex items-center justify-between">
+                               <div className="flex flex-col flex-1">
+                                  {templateNamingId === tpl.id ? (
+                                    <div className="flex gap-1">
+                                      <input 
+                                        type="text"
+                                        autoFocus
+                                        value={newTemplateName}
+                                        onChange={(e) => setNewTemplateName(e.target.value)}
+                                        onKeyDown={(e) => e.key === 'Enter' && confirmRenameTemplate()}
+                                        className="w-full px-2 py-1 text-xs font-bold border border-indigo-200 rounded outline-none focus:ring-2 focus:ring-indigo-500"
+                                      />
+                                      <button onClick={confirmRenameTemplate} className="text-emerald-500"><Check className="w-4 h-4" /></button>
+                                    </div>
+                                  ) : (
+                                    <>
+                                      <span className="text-xs font-black text-slate-900 uppercase tracking-tight">{tpl.name}</span>
+                                      <span className="text-[9px] text-slate-400 font-bold uppercase">{tpl.headerColumns.length} Colonnes</span>
+                                    </>
+                                  )}
+                               </div>
+                               <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <button
+                                    type="button"
+                                    onClick={() => renameTemplate(tpl.id)}
+                                    className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                                    title="Renommer"
+                                  >
+                                    <Type className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => removeTemplate(tpl.id)}
+                                    className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                                    title="Supprimer"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                               </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-50">
+                               <Button 
+                                 type="button" 
+                                 variant="outline" 
+                                 size="sm" 
+                                 className="flex-1 h-7 text-[9px] font-black uppercase tracking-widest border-indigo-100 text-indigo-600 hover:bg-indigo-50"
+                                 onClick={() => applyTemplate(tpl)}
+                               >
+                                  Visualiser
+                               </Button>
+                               <Button 
+                                 type="button" 
+                                 variant="outline" 
+                                 size="sm" 
+                                 className="flex-1 h-7 text-[9px] font-black uppercase tracking-widest border-amber-100 text-amber-600 hover:bg-amber-50"
+                                 onClick={() => updateTemplate(tpl.id)}
+                               >
+                                  Mise à jour
+                               </Button>
+                            </div>
+                         </div>
+                       ))}
+                     </div>
+                   ) : (
+                     <div className="py-8 text-center bg-white rounded-2xl border-2 border-dashed border-slate-200">
+                        <p className="text-xs font-bold text-slate-400 uppercase italic">Aucun modèle personnalisé enregistré.</p>
+                     </div>
+                   )}
+                </div>
+
+                {/* Guide explicatif des variables */}
+                {renderVariablesGuide()}
+              </div>
+            )}
+
             {/* Header Tab Content */}
             {activeTab === 'header' && (
               <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -1084,165 +1367,8 @@ export function OrganizationSettingsView({ onUpdate }: OrganizationSettingsViewP
                   </Button>
                 </div>
 
-            {/* Presets (Modèles Prédéfinis Prêts à l'Emploi) */}
-            <div className="p-6 bg-indigo-50/15 border-b border-slate-100">
-               <div className="flex items-center gap-3 mb-4">
-                 <div className="w-1.5 h-4 bg-indigo-600 rounded-full" />
-                 <div>
-                   <h4 className="text-sm font-black text-slate-800 uppercase tracking-tight">✨ Modèles d'En-tête Prédéfinis (Presets)</h4>
-                   <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Sélectionnez un modèle de base officiel pour l'appliquer instantanément</p>
-                 </div>
-               </div>
-
-               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                 {HEADER_PRESETS.map((preset) => (
-                   <div key={preset.id} className="p-4 rounded-3xl border-2 border-slate-200/85 bg-white hover:border-indigo-500 hover:shadow-soft transition-all flex flex-col justify-between space-y-4">
-                     <div className="space-y-1.5">
-                       <span className="text-xs font-black text-slate-800 block uppercase tracking-tight">{preset.name}</span>
-                       <p className="text-[10px] text-slate-500 font-semibold leading-relaxed line-clamp-3">{preset.description}</p>
-                     </div>
-
-                     {/* Visual column preview indicator */}
-                     <div className="flex gap-1 h-8 bg-slate-50 border border-slate-100/60 p-1 rounded-xl">
-                       {preset.headerColumns.map((col, idx) => (
-                         <div 
-                           key={idx} 
-                           style={{ width: `${col.width}%` }} 
-                           className="h-full bg-indigo-50 border border-indigo-100/50 rounded-lg flex items-center justify-center text-[8px] font-black text-indigo-500/80"
-                           title={`${col.width}% de largeur`}
-                         >
-                           {col.width}%
-                         </div>
-                       ))}
-                     </div>
-
-                     <Button 
-                       type="button" 
-                       variant="outline" 
-                       size="sm" 
-                       className="w-full h-8 text-[9px] font-black uppercase tracking-widest border-indigo-100 text-indigo-600 hover:bg-indigo-50/50 hover:border-indigo-200"
-                       onClick={() => applyPreset(preset)}
-                     >
-                       ⚡ Appliquer ce modèle
-                     </Button>
-                   </div>
-                 ))}
-               </div>
-            </div>
-
-            {/* Templates Management area */}
-            <div className="p-6 bg-slate-50 border-b border-slate-100">
-               <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center gap-3">
-                      <div className="w-1 h-3 bg-indigo-500 rounded-full" />
-                      <h4 className="text-sm font-bold text-slate-800 tracking-tight">Catalogue des Modèles d'En-tête</h4>
-                    </div>
-                  {!isAddingNewTemplate && (
-                    <Button type="button" variant="outline" size="sm" onClick={saveAsTemplate} className="h-8 text-[10px] uppercase font-black tracking-widest px-3 border-emerald-100 text-emerald-600 hover:bg-emerald-50">
-                      <Plus className="w-3.5 h-3.5 mr-1.5" /> Nouveau Modèle
-                    </Button>
-                  )}
-               </div>
-
-               {isAddingNewTemplate && (
-                 <div className="mb-6 p-4 bg-emerald-50 rounded-2xl border-2 border-emerald-100 animate-in zoom-in-95 duration-300">
-                    <label className="block text-[10px] font-black text-emerald-700 uppercase mb-2 tracking-widest">Nommer votre nouveau modèle</label>
-                    <div className="flex gap-2">
-                       <input 
-                         type="text" 
-                         autoFocus
-                         value={newTemplateName}
-                         onChange={(e) => setNewTemplateName(e.target.value)}
-                         onKeyDown={(e) => e.key === 'Enter' && confirmSaveTemplate()}
-                         className="flex-1 px-4 py-2 bg-white rounded-xl border border-emerald-200 outline-none focus:ring-2 focus:ring-emerald-500 font-bold"
-                         placeholder="Ex: Modèle En-tête Classique"
-                       />
-                       <Button size="sm" onClick={confirmSaveTemplate} className="bg-emerald-600 hover:bg-emerald-700">Enregistrer</Button>
-                       <Button size="sm" variant="ghost" onClick={() => { setIsAddingNewTemplate(false); setNewTemplateName(''); }}>Annuler</Button>
-                    </div>
-                 </div>
-               )}
-
-               {(settings.templates || []).length > 0 ? (
-                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                   {settings.templates?.map(tpl => (
-                     <div key={tpl.id} className="group p-4 rounded-2xl border-2 border-slate-200 bg-white hover:border-indigo-500 hover:shadow-lg transition-all space-y-3">
-                        <div className="flex items-center justify-between">
-                           <div className="flex flex-col flex-1">
-                              {templateNamingId === tpl.id ? (
-                                <div className="flex gap-1">
-                                  <input 
-                                    type="text"
-                                    autoFocus
-                                    value={newTemplateName}
-                                    onChange={(e) => setNewTemplateName(e.target.value)}
-                                    onKeyDown={(e) => e.key === 'Enter' && confirmRenameTemplate()}
-                                    className="w-full px-2 py-1 text-xs font-bold border border-indigo-200 rounded outline-none focus:ring-2 focus:ring-indigo-500"
-                                  />
-                                  <button onClick={confirmRenameTemplate} className="text-emerald-500"><Check className="w-4 h-4" /></button>
-                                </div>
-                              ) : (
-                                <>
-                                  <span className="text-xs font-black text-slate-900 uppercase tracking-tight">{tpl.name}</span>
-                                  <span className="text-[9px] text-slate-400 font-bold uppercase">{tpl.headerColumns.length} Colonnes</span>
-                                </>
-                              )}
-                           </div>
-                           <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                              <button
-                                type="button"
-                                onClick={() => renameTemplate(tpl.id)}
-                                className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
-                                title="Renommer"
-                              >
-                                <Type className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => removeTemplate(tpl.id)}
-                                className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
-                                title="Supprimer"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                           </div>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-50">
-                           <Button 
-                             type="button" 
-                             variant="outline" 
-                             size="sm" 
-                             className="flex-1 h-7 text-[9px] font-black uppercase tracking-widest border-indigo-100 text-indigo-600 hover:bg-indigo-50"
-                             onClick={() => applyTemplate(tpl)}
-                           >
-                              Visualiser
-                           </Button>
-                           <Button 
-                             type="button" 
-                             variant="outline" 
-                             size="sm" 
-                             className="flex-1 h-7 text-[9px] font-black uppercase tracking-widest border-amber-100 text-amber-600 hover:bg-amber-50"
-                             onClick={() => updateTemplate(tpl.id)}
-                           >
-                              Mise à jour
-                           </Button>
-                        </div>
-                     </div>
-                   ))}
-                 </div>
-               ) : (
-                 <div className="py-8 text-center bg-white rounded-2xl border-2 border-dashed border-slate-200">
-                    <p className="text-xs font-bold text-slate-400 uppercase italic">Aucun modèle personnalisé enregistré.</p>
-                 </div>
-               )}
-            </div>
-
-            {/* Guide explicatif des variables */}
-            {renderVariablesGuide()}
-
-            {/* Visual Editor Section */}
-            <div className="p-4 sm:p-12 bg-slate-200/50 relative overflow-hidden">
+                {/* Visual Editor Section */}
+                <div className="p-4 sm:p-12 bg-slate-200/50 relative overflow-hidden">
                {/* Decorative background elements to look like a desk */}
                <div className="absolute top-0 left-0 w-full h-full pointer-events-none opacity-20">
                  <div className="absolute top-10 left-10 w-32 h-32 bg-white rounded shadow-sm rotate-12" />

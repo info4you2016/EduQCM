@@ -70,7 +70,7 @@ export const ExamExportTemplate = React.forwardRef<HTMLDivElement, ExamExportTem
         .replace(/{{DATE}}/g, exam.scheduledAt ? new Date(exam.scheduledAt).toLocaleDateString('fr-FR') : new Date().toLocaleDateString('fr-FR'))
         .replace(/{{GROUPE}}/g, groupName || '')
         .replace(/{{DUREE}}/g, formatDuration(exam.durationMinutes))
-        .replace(/{{TYPE}}/g, exam.type === 'controle-continu' ? 'CC' : 'EFM')
+        .replace(/{{TYPE}}/g, exam.type === 'controle-continu' ? 'CC' : exam.type === 'fin-de-module' ? 'EFM' : 'Autre')
         .replace(/{{FILIERE}}/g, filiereName || '')
         .replace(/{{NIVEAU}}/g, filiereLevel || '')
         .replace(/{{ETABLISSEMENT}}/g, settings?.institutionName || '')
@@ -475,9 +475,22 @@ export const ExamExportTemplate = React.forwardRef<HTMLDivElement, ExamExportTem
                         </thead>
                         <tbody>
                           {groupedQuestions[type].map(({ q: question, originalIdx: qIdx }) => {
-                            const ans = String(question.correctAnswer).toLowerCase();
-                            const isTrue = ans === 'true' || ans === 'vrai';
-                            const isFalse = ans === 'false' || ans === 'faux';
+                            const correctOpt = question.options?.find(o => o.isCorrect);
+                            let isTrue = false;
+                            let isFalse = false;
+
+                            if (correctOpt) {
+                              const normText = String(correctOpt.text).toLowerCase().trim();
+                              isTrue = normText === 'vrai' || normText === 'true' || normText === 'v';
+                              isFalse = normText === 'faux' || normText === 'false' || normText === 'f';
+                            } else if (question.correctAnswer !== undefined && question.correctAnswer !== null) {
+                              const ansStr = String(question.correctAnswer).toLowerCase().trim();
+                              isTrue = ansStr === 'true' || ansStr === 'vrai' || ansStr === 'v';
+                              isFalse = ansStr === 'false' || ansStr === 'faux' || ansStr === 'f';
+                            } else if (question.correctOptionIndex !== undefined && question.correctOptionIndex !== null) {
+                              isTrue = question.correctOptionIndex === 0;
+                              isFalse = question.correctOptionIndex === 1;
+                            }
                             const rtl = isArabic(question.text);
                             return (
                               <tr key={qIdx}>
@@ -918,7 +931,21 @@ export const ExamExportTemplate = React.forwardRef<HTMLDivElement, ExamExportTem
                        const correctIdx = q.options?.findIndex(o => o.isCorrect);
                        return correctIdx !== undefined && correctIdx !== -1 ? String.fromCharCode(97 + correctIdx) : '?';
                     })()}
-                    {q.type === 'true-false' && (q.correctAnswer === 'true' ? 'V' : 'F')}
+                    {q.type === 'true-false' && (() => {
+                       const correctOpt = q.options?.find(o => o.isCorrect);
+                       if (correctOpt) {
+                         const normText = String(correctOpt.text).toLowerCase().trim();
+                         if (normText === 'vrai' || normText === 'true' || normText === 'v') return 'V';
+                         if (normText === 'faux' || normText === 'false' || normText === 'f') return 'F';
+                       }
+                       const ans = String(q.correctAnswer || '').toLowerCase().trim();
+                       if (ans === 'true' || ans === 'vrai' || ans === 'v') return 'V';
+                       if (ans === 'false' || ans === 'faux' || ans === 'f') return 'F';
+                       if (q.correctOptionIndex !== undefined && q.correctOptionIndex !== null) {
+                         return q.correctOptionIndex === 0 ? 'V' : 'F';
+                       }
+                       return '-';
+                    })()}
                     {q.type === 'short-answer' && 'SA'}
                     {q.type === 'fill-in-the-blanks' && 'TEXT'}
                     {q.type === 'ordering' && q.correctOrder?.map(idx => idx + 1).join(',')}

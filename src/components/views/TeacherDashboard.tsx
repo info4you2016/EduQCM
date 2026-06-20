@@ -28,6 +28,7 @@ import { AdminUserManagement } from '../sections/AdminUserManagement';
 import { AuditLogsView } from '../sections/AuditLogsView';
 import { AiAssistantView } from './AiAssistantView';
 import { SuiviAnalyseView } from './SuiviAnalyseView';
+import { useConfirm } from '../ui/ConfirmDialog';
 import { ResultDetailModal } from '../modals/ResultDetailModal';
 import { AddModuleForm } from '../forms/AddModuleForm';
 import { AddNotificationForm } from '../forms/AddNotificationForm';
@@ -72,6 +73,7 @@ export const TeacherDashboard = ({
   activeTabOverride,
   onTabChange
 }: TeacherDashboardProps) => {
+  const confirm = useConfirm();
   const [activeTab, setActiveInternalTab] = useState<'overview' | 'modules' | 'exams' | 'results' | 'notifications' | 'groups' | 'filieres' | 'system' | 'ai' | 'settings' | 'users' | 'audit'>(
     (activeTabOverride as any) || 'overview'
   );
@@ -395,7 +397,7 @@ export const TeacherDashboard = ({
 
     const groupId = exam.groupId || groups.find(g => g.name === exam.groupName)?.id;
     const group = groups.find(g => g.id === groupId);
-    const filiere = filieres.find(f => f.id === group?.filiereId || module.filiereId);
+    const filiere = filieres.find(f => f.id === (group?.filiereId || module.filiereId));
 
     const groupName = group?.name || exam.groupName || 'N/A';
     const filiereName = filiere ? `[${filiere.code}] ${filiere.name}` : 'N/A';
@@ -410,7 +412,9 @@ export const TeacherDashboard = ({
         filiereName,
         filiereLevel,
         groupName,
-        orgSettings
+        orgSettings,
+        exams,
+        results
       );
     } catch (err) {
       console.error("PV Word Export failed:", err);
@@ -430,7 +434,7 @@ export const TeacherDashboard = ({
 
     const groupId = exam.groupId || groups.find(g => g.name === exam.groupName)?.id;
     const group = groups.find(g => g.id === groupId);
-    const filiere = filieres.find(f => f.id === group?.filiereId || module.filiereId);
+    const filiere = filieres.find(f => f.id === (group?.filiereId || module.filiereId));
 
     const groupName = group?.name || exam.groupName || 'N/A';
     const filiereName = filiere ? `[${filiere.code}] ${filiere.name}` : 'N/A';
@@ -490,7 +494,7 @@ export const TeacherDashboard = ({
 
     const groupId = exam.groupId || groups.find(g => g.name === exam.groupName)?.id;
     const group = groups.find(g => g.id === groupId);
-    const filiere = filieres.find(f => f.id === group?.filiereId || module.filiereId);
+    const filiere = filieres.find(f => f.id === (group?.filiereId || module.filiereId));
 
     const groupName = group?.name || exam.groupName || '';
     const filiereName = filiere ? `[${filiere.code}] ${filiere.name}` : 'N/A';
@@ -706,7 +710,14 @@ export const TeacherDashboard = ({
   }, [exams, searchQuery, sortBy]);
 
   const handleDeleteModule = async (id: number) => {
-    if (!confirm("Voulez-vous vraiment supprimer ce module ?")) return;
+    const ok = await confirm({
+      title: "Supprimer le module",
+      message: "Voulez-vous vraiment supprimer ce module ?",
+      confirmLabel: "Supprimer",
+      cancelLabel: "Annuler",
+      variant: "danger"
+    });
+    if (!ok) return;
     try {
       await api.modules.delete(id);
       onRefresh();
@@ -971,6 +982,7 @@ export const TeacherDashboard = ({
                 exams={exams}
                 modules={modules}
                 results={results}
+                groups={groups}
                 setIsAddingExam={setIsAddingExam}
                 setEditingExam={setEditingExam}
                 setPreviewExam={setPreviewExam}
@@ -1899,6 +1911,8 @@ export const TeacherDashboard = ({
             filiereLevel={pvExportData.filiereLevel}
             groupName={pvExportData.groupName}
             settings={orgSettings}
+            allExams={exams}
+            allResults={results}
           />
         )}
       </div>

@@ -185,6 +185,12 @@ export const api = {
       clearAllCache();
       return request("/auth/logout", { method: "POST" });
     },
+    forgotPassword: async (email: string) => {
+      return request("/auth/forgot-password", { method: "POST", body: JSON.stringify({ email }) });
+    },
+    resetPassword: async (data: any) => {
+      return request("/auth/reset-password", { method: "POST", body: JSON.stringify(data) });
+    },
     me: () => request("/auth/me"),
     getProfile: () => request("/auth/me"),
   },
@@ -297,9 +303,22 @@ export const api = {
   },
   admin: {
     getDiagnostic: () => cachedRequest("/admin/db-diagnostic", {}, ["admin"]),
+    pushToSupabase: async () => {
+      const res = await request("/admin/db-push-supabase", { method: "POST" });
+      invalidateCacheTags(["admin"]);
+      return res;
+    },
+    testLatency: async () => {
+      return request("/admin/db-test-latency", { method: "POST" });
+    },
     runVacuum: async () => {
       const res = await request("/admin/db-vacuum", { method: "POST" });
       invalidateCacheTags(["admin"]);
+      return res;
+    },
+    clearDatabase: async () => {
+      const res = await request("/results/purge-archives", { method: "POST" });
+      invalidateCacheTags(["admin", "users", "students", "notifications", "autobackups"]);
       return res;
     },
     backup: () => "/api/admin/backup", // This returns the URL for download

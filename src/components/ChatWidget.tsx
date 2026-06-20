@@ -11,6 +11,7 @@ import { ChatMessage, UserProfile, Group, ChatReaction } from '../types';
 import { cn } from '../lib/utils';
 import toast from 'react-hot-toast';
 import { useAppStore } from '../store/useAppStore';
+import { useConfirm } from './ui/ConfirmDialog';
 
 interface ChatWidgetProps {
   user: UserProfile;
@@ -27,6 +28,7 @@ const CODE_TEMPLATES = [
 ];
 
 export const ChatWidget: React.FC<ChatWidgetProps> = ({ user }) => {
+  const confirm = useConfirm();
   const isExamActive = useAppStore(state => state.view === 'exam');
   const isStudent = user.role === 'student';
   const isChatDisabled = isExamActive && isStudent;
@@ -397,8 +399,15 @@ export const ChatWidget: React.FC<ChatWidgetProps> = ({ user }) => {
   };
 
   // Deletion logic
-  const handleDeleteMessage = (messageId: number) => {
-    if (!window.confirm("Voulez-vous vraiment supprimer définitivement ce message ?")) return;
+  const handleDeleteMessage = async (messageId: number) => {
+    const ok = await confirm({
+      title: "Supprimer le message",
+      message: "Voulez-vous vraiment supprimer définitivement ce message ?",
+      confirmLabel: "Supprimer",
+      cancelLabel: "Annuler",
+      variant: "danger"
+    });
+    if (!ok) return;
     socket.emit("chat:message:delete", {
       id: messageId,
       channelType,

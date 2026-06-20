@@ -187,7 +187,7 @@
     margin: 12mm 15mm 12mm 15mm;
   }
 
-  #pv-export-container, .pv-export-content, #attestation-export-container, .attestation-export-content {
+  #pv-export-container, .pv-export-content {
     page: pv-landscape-page;
     width: 100% !important;
     max-width: 100% !important;

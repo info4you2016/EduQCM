@@ -11,10 +11,23 @@ import {
   BorderStyle, 
   VerticalAlign,
   VerticalMergeType,
-  PageOrientation
+  PageOrientation,
+  ImageRun
 } from "docx";
 import { saveAs } from "file-saver";
 import { Exam, Result, Module, OrganizationSettings } from "../types";
+
+async function fetchImageAsBuffer(url: string): Promise<Uint8Array | null> {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return null;
+    const arrayBuffer = await response.arrayBuffer();
+    return new Uint8Array(arrayBuffer);
+  } catch (error) {
+    console.error("Failed to fetch image:", error);
+    return null;
+  }
+}
 
 export const exportPVToWord = async (
   exam: Exam,
@@ -23,17 +36,78 @@ export const exportPVToWord = async (
   filiereName: string,
   filiereLevel: string,
   groupName: string,
-  settings?: OrganizationSettings | null
+  settings?: OrganizationSettings | null,
+  allExams?: Exam[],
+  allResults?: Result[]
 ) => {
   // Determine year based on filiereLevel or year info
   const levelStr = (filiereLevel || '').toLowerCase();
-  const isFirstYear = levelStr.includes('1') || levelStr.includes('premiere') || levelStr.includes('1ère');
-  const isSecondYear = levelStr.includes('2') || levelStr.includes('deuxieme') || levelStr.includes('2ème') || (!isFirstYear && levelStr.includes('ts'));
-  const isThirdYear = levelStr.includes('3') || levelStr.includes('troisieme') || levelStr.includes('3ème');
+  const groupStr = (groupName || '').toLowerCase();
 
-  // Default durations
-  const masseHorairePrevue = exam.durationMinutes ? `${Math.round(exam.durationMinutes / 60)}H` : '30H';
-  const masseHoraireRealisee = exam.durationMinutes ? `${Math.round(exam.durationMinutes / 60)}H` : '30H';
+  let isFirstYear = levelStr.includes('1') || levelStr.includes('premiere') || levelStr.includes('1ère');
+  let isSecondYear = levelStr.includes('2') || levelStr.includes('deuxieme') || levelStr.includes('2ème') || (!isFirstYear && levelStr.includes('ts'));
+  let isThirdYear = levelStr.includes('3') || levelStr.includes('troisieme') || levelStr.includes('3ème');
+
+  // Override/supplement based on groupName (e.g., CDN102 is 1ère année, TCM201 is 2ème année)
+  const groupMatch1xx = groupStr.match(/1\d{2}/);
+  const groupMatch2xx = groupStr.match(/2\d{2}/);
+  const groupMatch3xx = groupStr.match(/3\d{2}/);
+
+  if (groupMatch1xx) {
+    isFirstYear = true;
+    isSecondYear = false;
+    isThirdYear = false;
+  } else if (groupMatch2xx) {
+    isFirstYear = false;
+    isSecondYear = true;
+    isThirdYear = false;
+  } else if (groupMatch3xx) {
+    isFirstYear = false;
+    isSecondYear = false;
+    isThirdYear = true;
+  }
+
+  // Sort trainees alphabetically by student name
+  const sortedResults = [...results].sort((a, b) => {
+    const nameA = (a.studentName || '').trim().toLowerCase();
+    const nameB = (b.studentName || '').trim().toLowerCase();
+    return nameA.localeCompare(nameB, 'fr');
+  });
+
+  // Default durations (using module's duration hours as requested by user)
+  const masseHorairePrevue = module?.durationHours ? `${module.durationHours}H` : '30H';
+  const masseHoraireRealisee = module?.durationHours ? `${module.durationHours}H` : '30H';
+
+  const orgName = settings?.orgName || 'OFPPT';
+  const orgNameArabic = settings?.orgNameArabic || 'مكتب التكوين المهني وإنعاش الشغل';
+  const orgNameFrench = settings?.orgNameFrench || 'Office de la Formation Professionnelle et de la promotion du travail';
+  const regionalDirection = settings?.regionalDirection || 'Direction Régionale De BM-KH';
+  const institutionName = settings?.institutionName || 'Institut Spécialisé de Technologie Appliquée AL HASSANIA Oued-Zem';
+  const orgSubName = settings?.orgSubName || 'DRBMKH';
+  const academicYear = settings?.academicYear || '2024/2025';
+
+  let logoBufferLeft: Uint8Array | null = null;
+  let logoBufferRight: Uint8Array | null = null;
+  
+  if (settings?.orgLogoUrl) {
+    logoBufferLeft = await fetchImageAsBuffer(settings.orgLogoUrl);
+  }
+  if (settings?.orgLogoUrlRight) {
+    logoBufferRight = await fetchImageAsBuffer(settings.orgLogoUrlRight);
+  } else if (settings?.orgLogoUrl) {
+    logoBufferRight = logoBufferLeft;
+  }
+
+  const createLogoImage = (buffer: Uint8Array | null, width = 50, height = 50) => {
+    if (!buffer) return null;
+    return new ImageRun({
+      data: buffer,
+      transformation: {
+        width: width,
+        height: height,
+      },
+    } as any);
+  };
 
   const getAppreciation = (scorePercent: number) => {
     if (scorePercent >= 80) return 'Très Bien';
@@ -148,7 +222,7 @@ export const exportPVToWord = async (
                   new TextRun({ text: "Groupe : ", bold: true, font: "Times New Roman" }),
                   new TextRun({ text: (groupName || '101') + "         ", font: "Times New Roman" }),
                   new TextRun({ text: "Nombre de stagiaires : ", bold: true, font: "Times New Roman" }),
-                  new TextRun({ text: String(results.length), font: "Times New Roman" })
+                  new TextRun({ text: String(sortedResults.length), font: "Times New Roman" })
                 ]
               })
             ]
@@ -358,12 +432,53 @@ export const exportPVToWord = async (
 
   const bodyRows: TableRow[] = [];
 
+  // Find CC Exams for this module and group to display continuous assessment marks
+  const ccExams = (allExams || []).filter(ex => 
+    ex.moduleId === exam.moduleId && 
+    ex.type === 'controle-continu' && 
+    (ex.groupId === exam.groupId || ex.groupName === exam.groupName)
+  );
+  // Sort them so they map consistently to CC1, CC2, CC3, etc.
+  ccExams.sort((a, b) => a.id - b.id);
+
   // Generate real results rows
-  results.forEach((res, index) => {
+  sortedResults.forEach((res, index) => {
+    // CC Marks lookup for each of the 5 CC columns
+    const studentCCMarks: string[] = [];
+    let ccSum = 0;
+    let ccCount = 0;
+
+    for (let i = 0; i < 5; i++) {
+      const ccExam = ccExams[i];
+      if (ccExam) {
+        const studentCCResult = (allResults || []).find(r => 
+          r.examId === ccExam.id && 
+          (r.studentId === res.studentId || (r.studentName && res.studentName && r.studentName.toLowerCase() === res.studentName.toLowerCase()))
+        );
+
+        if (studentCCResult) {
+          const markOutOf20 = (studentCCResult.score / (studentCCResult.totalPoints || 1)) * 20;
+          studentCCMarks.push(markOutOf20.toFixed(1));
+          ccSum += markOutOf20;
+          ccCount++;
+        } else {
+          studentCCMarks.push("-");
+        }
+      } else {
+        studentCCMarks.push("-");
+      }
+    }
+
+    const moyCC = ccCount > 0 ? ccSum / ccCount : null;
+    const moyCCText = moyCC !== null ? moyCC.toFixed(1) : "-";
+
     const scorePercent = (res.score / (res.totalPoints || 1)) * 100;
     const efm40 = (res.score / (res.totalPoints || 1)) * 40;
-    const moyModule = efm40 / 2;
-    const appreciation = getAppreciation(scorePercent);
+    
+    // Moy Module /20 is the average of (Moy CC + Note EFM out of 20) / 2 if CC exists, otherwise just EFM / 20
+    const efmOutOf20 = efm40 / 2;
+    const moyModule = moyCC !== null ? (moyCC + efmOutOf20) / 2 : efmOutOf20;
+    const appreciation = getAppreciation((moyModule / 20) * 100);
 
     // Format student name to standard: LASTNAME Firstname
     const fullName = res.studentName || '';
@@ -404,38 +519,38 @@ export const exportPVToWord = async (
             width: { size: 5, type: WidthType.PERCENTAGE },
             borders: tableAllBorders,
             verticalAlign: VerticalAlign.CENTER,
-            children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: "-", size: 18, font: "Times New Roman" })] })]
+            children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: studentCCMarks[0], size: 18, font: "Times New Roman" })] })]
           }),
           new TableCell({
             width: { size: 5, type: WidthType.PERCENTAGE },
             borders: tableAllBorders,
             verticalAlign: VerticalAlign.CENTER,
-            children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: "-", size: 18, font: "Times New Roman" })] })]
+            children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: studentCCMarks[1], size: 18, font: "Times New Roman" })] })]
           }),
           new TableCell({
             width: { size: 5, type: WidthType.PERCENTAGE },
             borders: tableAllBorders,
             verticalAlign: VerticalAlign.CENTER,
-            children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: "-", size: 18, font: "Times New Roman" })] })]
+            children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: studentCCMarks[2], size: 18, font: "Times New Roman" })] })]
           }),
           new TableCell({
             width: { size: 5, type: WidthType.PERCENTAGE },
             borders: tableAllBorders,
             verticalAlign: VerticalAlign.CENTER,
-            children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: "-", size: 18, font: "Times New Roman" })] })]
+            children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: studentCCMarks[3], size: 18, font: "Times New Roman" })] })]
           }),
           new TableCell({
             width: { size: 5, type: WidthType.PERCENTAGE },
             borders: tableAllBorders,
             verticalAlign: VerticalAlign.CENTER,
-            children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: "-", size: 18, font: "Times New Roman" })] })]
+            children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: studentCCMarks[4], size: 18, font: "Times New Roman" })] })]
           }),
           // Moy CC
           new TableCell({
             width: { size: 8, type: WidthType.PERCENTAGE },
             borders: tableAllBorders,
             verticalAlign: VerticalAlign.CENTER,
-            children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: "-", size: 18, font: "Times New Roman" })] })]
+            children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: moyCCText, size: 18, font: "Times New Roman" })] })]
           }),
           // Note EFM /40
           new TableCell({
@@ -473,7 +588,7 @@ export const exportPVToWord = async (
                     text: moyModule.toFixed(1), 
                     bold: true, 
                     size: 18, 
-                    color: scorePercent < 50 ? "B91C1C" : "000000",
+                    color: (moyModule / 20 * 100) < 50 ? "B91C1C" : "000000",
                     font: "Times New Roman" 
                   })
                 ]
@@ -495,7 +610,7 @@ export const exportPVToWord = async (
                     bold: true, 
                     size: 16, 
                     font: "Times New Roman",
-                    color: scorePercent >= 70 ? "047857" : scorePercent < 50 ? "B91C1C" : "4B5563"
+                    color: (moyModule / 20 * 100) >= 70 ? "047857" : (moyModule / 20 * 100) < 50 ? "B91C1C" : "4B5563"
                   })
                 ]
               })
@@ -507,10 +622,10 @@ export const exportPVToWord = async (
   });
 
   // Safe padding with empty rows if total results are less than 15
-  if (results.length < 15) {
-    const padCount = 15 - results.length;
+  if (sortedResults.length < 15) {
+    const padCount = 15 - sortedResults.length;
     for (let index = 0; index < padCount; index++) {
-      const emptyIdx = results.length + index + 1;
+      const emptyIdx = sortedResults.length + index + 1;
       bodyRows.push(
         new TableRow({
           children: [
@@ -551,14 +666,122 @@ export const exportPVToWord = async (
     ]
   });
 
+  const logoLeftImg = createLogoImage(logoBufferLeft, 55, 55);
+  const logoRightImg = createLogoImage(logoBufferRight, 55, 55);
+
+  const HeaderBorderNone = { style: BorderStyle.NONE };
+  const headerBorders = {
+    top: HeaderBorderNone,
+    bottom: HeaderBorderNone,
+    left: HeaderBorderNone,
+    right: HeaderBorderNone
+  };
+
+  const headerTable = new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    rows: [
+      new TableRow({
+        children: [
+          new TableCell({
+            width: { size: 20, type: WidthType.PERCENTAGE },
+            borders: headerBorders,
+            verticalAlign: VerticalAlign.CENTER,
+            children: [
+              logoLeftImg 
+                ? new Paragraph({ alignment: AlignmentType.LEFT, children: [logoLeftImg] })
+                : new Paragraph({
+                    alignment: AlignmentType.LEFT,
+                    children: [new TextRun({ text: orgName, bold: true, size: 20, font: "Times New Roman" })]
+                  })
+            ]
+          }),
+          new TableCell({
+            width: { size: 60, type: WidthType.PERCENTAGE },
+            borders: headerBorders,
+            verticalAlign: VerticalAlign.CENTER,
+            children: [
+              new Paragraph({
+                alignment: AlignmentType.CENTER,
+                children: [
+                  new TextRun({ 
+                    text: orgNameFrench, 
+                    bold: true,
+                    size: 16, 
+                    font: "Times New Roman" 
+                  })
+                ]
+              }),
+              new Paragraph({
+                alignment: AlignmentType.CENTER,
+                children: [
+                  new TextRun({ 
+                    text: institutionName, 
+                    bold: true,
+                    size: 16, 
+                    font: "Times New Roman" 
+                  })
+                ]
+              }),
+              new Paragraph({
+                alignment: AlignmentType.CENTER,
+                children: [
+                  new TextRun({ 
+                    text: `Année de formation : ${academicYear}`, 
+                    bold: true,
+                    size: 16, 
+                    font: "Times New Roman" 
+                  })
+                ]
+              }),
+              new Paragraph({
+                alignment: AlignmentType.CENTER,
+                spacing: { before: 100 },
+                children: [
+                  new TextRun({ 
+                    text: "PV de l'Examen de Fin de Module", 
+                    bold: true, 
+                    size: 28, 
+                    font: "Times New Roman" 
+                  })
+                ]
+              })
+            ]
+          }),
+          new TableCell({
+            width: { size: 20, type: WidthType.PERCENTAGE },
+            borders: headerBorders,
+            verticalAlign: VerticalAlign.CENTER,
+            children: [
+              logoRightImg 
+                ? new Paragraph({ alignment: AlignmentType.RIGHT, children: [logoRightImg] })
+                : new Paragraph({
+                    alignment: AlignmentType.RIGHT,
+                    children: [
+                      new TextRun({ 
+                        text: orgNameArabic, 
+                        bold: true, 
+                        size: 18, 
+                        font: "Times New Roman" 
+                      })
+                    ]
+                  })
+            ]
+          })
+        ]
+      })
+    ]
+  });
+
   const doc = new Document({
     sections: [
       {
         properties: {
           page: {
-            orientation: PageOrientation.LANDSCAPE,
-            width: { size: 16838, type: WidthType.DXA },  // Standard A4 landscape size in twips (297mm)
-            height: { size: 11906, type: WidthType.DXA }, // Standard A4 landscape height in twips (210mm)
+            size: {
+              orientation: PageOrientation.LANDSCAPE,
+              width: 11906, // 11906 twips (will be swapped with height by 'docx' lib under LANDSCAPE orientation)
+              height: 16838, // 16838 twips (will be swapped with width by 'docx' lib under LANDSCAPE orientation)
+            },
             margin: {
               top: 567, // 10mm
               bottom: 567, // 10mm
@@ -566,21 +789,11 @@ export const exportPVToWord = async (
               right: 850 // 15mm
             }
           }
-        } as any,
+        },
         children: [
-          // Title
-          new Paragraph({
-            alignment: AlignmentType.CENTER,
-            spacing: { after: 240 },
-            children: [
-              new TextRun({
-                text: "PV de l'Examen de Fin de Module",
-                bold: true,
-                size: 32, // 16pt
-                font: "Times New Roman"
-              })
-            ]
-          }),
+          headerTable,
+
+          new Paragraph({ text: "", spacing: { after: 200 } }),
 
           // Metadata Info table
           metaTable,

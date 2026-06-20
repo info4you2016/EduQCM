@@ -9,6 +9,7 @@ import { cn } from '../lib/utils';
 import { Card } from './ui/Card';
 import { Button } from './ui/Button';
 import { api } from '../lib/api';
+import { useConfirm } from './ui/ConfirmDialog';
 
 interface DetailedNotificationCardProps {
   notification: Notification;
@@ -25,6 +26,7 @@ export const DetailedNotificationCard: React.FC<DetailedNotificationCardProps> =
   groups = [],
   filieres = []
 }) => {
+  const confirm = useConfirm();
   const [showComments, setShowComments] = useState(false);
   const [commentContent, setCommentContent] = useState('');
   const [isSubmittingComment, setIsSubmittingComment] = useState(false);
@@ -80,7 +82,14 @@ export const DetailedNotificationCard: React.FC<DetailedNotificationCardProps> =
   };
 
   const handleDeleteComment = async (commentId: number) => {
-    if (!confirm("Voulez-vous supprimer ce commentaire ?")) return;
+    const ok = await confirm({
+      title: "Supprimer le commentaire",
+      message: "Voulez-vous supprimer ce commentaire ?",
+      confirmLabel: "Supprimer",
+      cancelLabel: "Annuler",
+      variant: "danger"
+    });
+    if (!ok) return;
     try {
       await api.notifications.deleteComment(commentId);
       onRefresh();
@@ -212,7 +221,14 @@ export const DetailedNotificationCard: React.FC<DetailedNotificationCardProps> =
                 variant="ghost" 
                 size="sm" 
                 onClick={async () => {
-                  if (confirm("Supprimer définitivement cette annonce ?")) {
+                  const ok = await confirm({
+                    title: "Supprimer l'annonce",
+                    message: "Supprimer définitivement cette annonce ?",
+                    confirmLabel: "Supprimer",
+                    cancelLabel: "Annuler",
+                    variant: "danger"
+                  });
+                  if (ok) {
                     await api.notifications.delete(notification.id);
                     onRefresh();
                   }

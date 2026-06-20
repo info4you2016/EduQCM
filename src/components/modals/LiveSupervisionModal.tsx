@@ -11,6 +11,7 @@ import { Modal } from '../ui/Modal';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { useAppStore } from '../../store/useAppStore';
+import { useConfirm } from '../ui/ConfirmDialog';
 
 interface LiveStudentSession {
   studentId: number;
@@ -44,6 +45,7 @@ interface LiveSupervisionModalProps {
 }
 
 export const LiveSupervisionModal: React.FC<LiveSupervisionModalProps> = ({ exam, onClose, moduleName }) => {
+  const confirm = useConfirm();
   const {
     supervisedSessions: sessions,
     setSupervisedSessions: setSessions,
@@ -266,9 +268,16 @@ export const LiveSupervisionModal: React.FC<LiveSupervisionModalProps> = ({ exam
                     <div className="flex gap-2">
                       <Button
                         size="sm"
-                        onClick={(e) => {
+                        onClick={async (e) => {
                           e.stopPropagation();
-                          if (confirm(`Voulez-vous bloquer et forcer la soumission de l'examen de ${ps.studentName} ?`)) {
+                          const ok = await confirm({
+                            title: "Bloquer l'étudiant",
+                            message: `Voulez-vous bloquer et forcer la soumission de l'examen de ${ps.studentName} ?`,
+                            confirmLabel: "Bloquer",
+                            cancelLabel: "Annuler",
+                            variant: "danger"
+                          });
+                          if (ok) {
                             socket.emit('exam:remote-action', { examId: exam.id, studentId: ps.studentId, action: 'stop' });
                           }
                         }}
@@ -440,9 +449,16 @@ export const LiveSupervisionModal: React.FC<LiveSupervisionModalProps> = ({ exam
                                     <Button
                                       size="sm"
                                       className="w-full sm:w-auto bg-rose-600 hover:bg-rose-700 text-white font-black text-[10px] uppercase tracking-wider h-9 rounded-xl flex items-center justify-center gap-1.5 px-3 whitespace-nowrap shadow-sm shadow-rose-600/10"
-                                      onClick={(e) => {
+                                      onClick={async (e) => {
                                         e.stopPropagation();
-                                        if (confirm(`Voulez-vous bloquer et forcer la soumission de l'examen de ${session.studentName} ?`)) {
+                                        const ok = await confirm({
+                                          title: "Bloquer l'étudiant",
+                                          message: `Voulez-vous bloquer et forcer la soumission de l'examen de ${session.studentName} ?`,
+                                          confirmLabel: "Bloquer",
+                                          cancelLabel: "Annuler",
+                                          variant: "danger"
+                                        });
+                                        if (ok) {
                                           socket.emit('exam:remote-action', { examId: exam.id, studentId: session.studentId, action: 'stop' });
                                         }
                                       }}
@@ -514,9 +530,16 @@ export const LiveSupervisionModal: React.FC<LiveSupervisionModalProps> = ({ exam
                                     <Button 
                                       size="sm"
                                       disabled={isFinished}
-                                      onClick={(e) => {
+                                      onClick={async (e) => {
                                         e.stopPropagation();
-                                        if (confirm(`Voulez-vous forcer l'arrêt immédiat et la soumission de l'examen pour ${session.studentName} ?`)) {
+                                        const ok = await confirm({
+                                          title: "Forcer l'arrêt",
+                                          message: `Voulez-vous forcer l'arrêt immédiat et la soumission de l'examen pour ${session.studentName} ?`,
+                                          confirmLabel: "Forcer l'arrêt",
+                                          cancelLabel: "Annuler",
+                                          variant: "danger"
+                                        });
+                                        if (ok) {
                                           socket.emit('exam:remote-action', { examId: exam.id, studentId: session.studentId, action: 'stop' });
                                         }
                                       }}

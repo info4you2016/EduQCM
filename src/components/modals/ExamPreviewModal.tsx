@@ -33,9 +33,13 @@ export const ExamPreviewModal = React.memo(({ exam, onClose, moduleName }: ExamP
               {exam.type && (
                 <span className={cn(
                   "text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest",
-                  exam.type === 'fin-de-module' ? "bg-purple-100 text-purple-600" : "bg-blue-100 text-blue-600"
+                  exam.type === 'fin-de-module' 
+                    ? "bg-purple-100 text-purple-600" 
+                    : exam.type === 'controle-continu'
+                      ? "bg-blue-100 text-blue-600"
+                      : "bg-amber-100 text-amber-600"
                 )}>
-                  {exam.type === 'fin-de-module' ? 'Fin de Module (40 pts)' : 'Contrôle Continu (20 pts)'}
+                  {exam.type === 'fin-de-module' ? 'Fin de Module (40 pts)' : exam.type === 'controle-continu' ? 'Contrôle Continu (20 pts)' : `Autre (${totalPoints} pts)`}
                 </span>
               )}
               <span className="text-[10px] font-black bg-amber-100 text-amber-600 px-2 py-0.5 rounded-full uppercase tracking-widest">

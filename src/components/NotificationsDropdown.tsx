@@ -29,7 +29,32 @@ export const NotificationsDropdown: React.FC<NotificationsDropdownProps> = ({
 
   const isTeacher = user?.role === 'teacher';
 
-  const unreadNotifications = (notifications || []).filter(n => !n.read);
+  const visibleNotifications = React.useMemo(() => {
+    if (!user) return notifications || [];
+    if (user.role === 'teacher' || user.role === 'admin') return notifications || [];
+    
+    return (notifications || []).filter(notif => {
+      // Must be student-appropriate audience
+      const isTargetedToStudentRole = !notif.audienceRole || notif.audienceRole === 'all' || notif.audienceRole === 'students';
+      if (!isTargetedToStudentRole) return false;
+      
+      const notifGroup = notif.groupId ? Number(notif.groupId) : null;
+      const notifFiliere = notif.filiereId ? Number(notif.filiereId) : null;
+      
+      const userGroup = user.groupId ? Number(user.groupId) : null;
+      const userFiliere = user.filiereId ? Number(user.filiereId) : null;
+
+      // Global if there are NO specific targets
+      const isGlobal = (!notifGroup || notifGroup === 0) && (!notifFiliere || notifFiliere === 0);
+      
+      const matchesGroup = notifGroup && notifGroup !== 0 && userGroup && userGroup !== 0 && notifGroup === userGroup;
+      const matchesFiliere = notifFiliere && notifFiliere !== 0 && userFiliere && userFiliere !== 0 && notifFiliere === userFiliere;
+
+      return isGlobal || matchesGroup || matchesFiliere;
+    });
+  }, [notifications, user]);
+
+  const unreadNotifications = (visibleNotifications || []).filter(n => !n.read);
   const unreadCount = unreadNotifications.length;
 
   useEffect(() => {

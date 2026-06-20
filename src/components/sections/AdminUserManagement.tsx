@@ -25,6 +25,7 @@ import { Input } from '../ui/Input';
 import { cn } from '../../lib/utils';
 import { toast } from 'react-hot-toast';
 import * as XLSX from 'xlsx';
+import { useConfirm } from '../ui/ConfirmDialog';
 import { Filiere, Group } from '../../types';
 
 interface User {
@@ -39,6 +40,7 @@ interface User {
 }
 
 export const AdminUserManagement: React.FC = () => {
+  const confirm = useConfirm();
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -164,7 +166,14 @@ export const AdminUserManagement: React.FC = () => {
   };
 
   const handleDeleteUser = async (id: number) => {
-    if (!confirm("Êtes-vous sûr de vouloir supprimer cet utilisateur ?")) return;
+    const ok = await confirm({
+      title: "Supprimer l'utilisateur",
+      message: "Êtes-vous sûr de vouloir supprimer cet utilisateur ?",
+      confirmLabel: "Supprimer",
+      cancelLabel: "Annuler",
+      variant: "danger"
+    });
+    if (!ok) return;
     try {
       await api.admin.deleteUser(id);
       toast.success("Utilisateur supprimé");

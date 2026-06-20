@@ -175,8 +175,21 @@ export default function App() {
         if (user.role === 'teacher' || user.role === 'admin') {
           setNotifications(prev => [notif, ...prev]);
         } else {
-          // If student, only accept global or group-specific
-          if (!notif.groupId || notif.groupId === user.groupId) {
+          // Must be student-appropriate audience
+          const isTargetedToStudentRole = !notif.audienceRole || notif.audienceRole === 'all' || notif.audienceRole === 'students';
+          if (!isTargetedToStudentRole) return;
+
+          const notifGroup = notif.groupId ? Number(notif.groupId) : null;
+          const notifFiliere = notif.filiereId ? Number(notif.filiereId) : null;
+          
+          const userGroup = user.groupId ? Number(user.groupId) : null;
+          const userFiliere = user.filiereId ? Number(user.filiereId) : null;
+
+          const isGlobal = (!notifGroup || notifGroup === 0) && (!notifFiliere || notifFiliere === 0);
+          const matchesGroup = notifGroup && notifGroup !== 0 && userGroup && userGroup !== 0 && notifGroup === userGroup;
+          const matchesFiliere = notifFiliere && notifFiliere !== 0 && userFiliere && userFiliere !== 0 && notifFiliere === userFiliere;
+
+          if (isGlobal || matchesGroup || matchesFiliere) {
             setNotifications(prev => [notif, ...prev]);
           }
         }
@@ -519,7 +532,7 @@ export default function App() {
               <ExamView 
                 exam={activeExam} 
                 user={user}
-                moduleName={activeExam.moduleName || modules.find(m => m.id === activeExam.moduleId)?.name}
+                moduleName={activeExam.moduleName || modules.find(m => Number(m.id) === Number(activeExam.moduleId))?.name}
                 onComplete={async () => {
                   await fetchData();
                   setView('dashboard');

@@ -1,4 +1,6 @@
 import { stripHtml } from "./utils";
+import { PracticalExamSheet } from "../types";
+
 
 async function fetchFromAI(endpoint: string, body: any): Promise<any> {
   const response = await fetch(endpoint, {
@@ -141,8 +143,32 @@ export const evaluateShortAnswer = async (question: string, expectedAnswer: stri
   
   const result = await fetchFromAI("/api/ai/evaluate-short-answer", { question, expectedAnswer, studentAnswer });
 
-  const score = parseFloat(result.text.trim());
-  return isNaN(score) ? 0 : Math.max(0, Math.min(1, score));
+  const text = result.text || "";
+  let scoreNum = 0;
+  
+  try {
+    const cleaned = text.trim();
+    if (cleaned.startsWith("{")) {
+      const parsed = JSON.parse(cleaned);
+      if (parsed && parsed.score !== undefined) {
+        scoreNum = parseFloat(parsed.score);
+      }
+    } else {
+      scoreNum = parseFloat(cleaned);
+    }
+  } catch (e) {
+    // ignore parsing errors
+  }
+  
+  if (isNaN(scoreNum)) {
+    // search for a floating point number in text
+    const match = text.replace(',', '.').match(/(?:0\.\d+|1\.0|0|1|\.\d+)/);
+    if (match) {
+      scoreNum = parseFloat(match[0]);
+    }
+  }
+  
+  return isNaN(scoreNum) ? 0 : Math.max(0, Math.min(1, scoreNum));
 };
 
 export const analyzeExamResults = async (
@@ -455,4 +481,215 @@ export const generateCohortReportAI = async (
   const result = await fetchFromAI("/api/ai/generic", { prompt, config });
   return JSON.parse(result.text);
 };
+
+export const generatePracticalExamAI = async (
+  vendor: string,
+  certificationName: string,
+  topic: string,
+  totalPoints: number,
+  durationMinutes: number
+): Promise<PracticalExamSheet> => {
+  const prompt = `Tu es une IA experte en certifications technologiques majeures (Microsoft, Cisco, AWS, etc.) et formateur académique chevronné.
+    Génère une fiche de sujet et d'évaluation structurée et complète pour un Examen Pratique de Certification.
+    Elle doit respecter rigoureusement les critères suivants :
+    - Constructeur / Vendeur : "${vendor}"
+    - Certification ciblée : "${certificationName}"
+    - Sujet technique d'étude : "${topic}"
+    - Total des points d'évaluation : ${totalPoints} points
+    - Durée recommandée : ${durationMinutes} minutes
+
+    Génère une épreuve pratique réaliste de niveau professionnel, comprenant :
+    1. Un titre d'examen officiel et accrocheur (ex: "Évaluation Pratique Cisco CCNA : routage statique et dynamique").
+    2. Un contexte / scénario professionnel d'entreprise immersif (l'élève est mis en situation réelle de projet ou d'incident).
+    3. Les prérequis opérationnels ou applicatifs de l'environnement matériel/logiciel (ex: Packet Tracer 8.x, MS Excel v16, VM Ubuntu Server).
+    4. 3 à 5 tâches détaillées que le candidat doit accomplir dans l'environnement de test. La somme de la propriété "points" de toutes ces tâches DOIT être exactement de ${totalPoints} points d'évaluation.
+    5. Pour chaque tâche, fournis un titre de tâche, une description claire, des points attribués, un tableau ordonné d'étapes d'exécution détaillées (steps), et une propriété "solution" très détaillée décrivant la réponse correcte attendue, les lignes de commandes exactes, les formules de calcul MS Excel précises (par ex. =RECHERCHEV ou =SOMME.SI), ou les correctifs à apporter au code/script de départ.
+    6. De 1 à 3 fichiers fournis de démarrage ('providedFiles') adaptés au sujet technique et BASÉS DIRECTEMENT ET LOGIQUEMENT SUR LES TÂCHES ET QUESTIONS DE L'EXAMEN :
+       - Les fichiers doivent représenter l'état de départ que le candidat doit modifier, configurer, analyser ou corriger d'après les consignes des tâches.
+       - Si le sujet de l'examen porte sur Excel (vendeur Microsoft Office, etc.) ou s'il y a un tableau à compléter/analyser, fournis 1 fichier 'xlsx' contenant d'authentiques données brutes cohérentes de départ (dans 'excelSheets' avec des 'headers' et des 'rows' remplis de valeurs de test réalistes et d'exemples concrets, pas de simples placeholders). Les lignes et colonnes doivent correspondre aux éléments que les tâches demandent d'ordonner, de calculer ou de mettre en forme.
+       - Si le sujet concerne Cisco, Linux ou du scripting, fournis un fichier '.txt' ou '.sh' contenant le script de base incomplet, un script buggé à corriger, ou des configurations initiales décrites dans les consignes des tâches de l'examen.
+       - Si c'est Microsoft Word, crée un '.docx' avec le texte brut non mis en forme et désorganisé, ou le canevas initial que la tâche demande de restructurer.
+    7. Une grille de critères de correction détaillés (evaluationCriteria) permettant à un formateur d'évaluer impartialement la production en temps réel.
+    8. Des conseils et remarques d'évaluation (generalTipsForTeacher) utiles pour le formateur correcteur.
+    9. Un résumé global de la solution officielle attendue ('officialSolutionSummary') décrivant en quelques paragraphes la démarche globale de résolution idéale de l'ensemble de l'épreuve.
+
+    Réponds uniquement au format JSON valide.`;
+
+  const config = {
+    responseMimeType: "application/json",
+    responseSchema: {
+      type: "OBJECT",
+      properties: {
+        title: { type: "STRING" },
+        vendor: { type: "STRING" },
+        certificationName: { type: "STRING" },
+        durationMinutes: { type: "INTEGER" },
+        scenario: { type: "STRING" },
+        requirements: { type: "ARRAY", items: { type: "STRING" } },
+        tasks: {
+          type: "ARRAY",
+          items: {
+            type: "OBJECT",
+            properties: {
+              id: { type: "STRING" },
+              title: { type: "STRING" },
+              description: { type: "STRING" },
+              points: { type: "INTEGER" },
+              steps: { type: "ARRAY", items: { type: "STRING" } },
+              solution: { type: "STRING" }
+            },
+            required: ["id", "title", "description", "points", "steps", "solution"]
+          }
+        },
+        providedFiles: {
+          type: "ARRAY",
+          items: {
+            type: "OBJECT",
+            properties: {
+              fileName: { type: "STRING" },
+              fileType: { type: "STRING" },
+              description: { type: "STRING" },
+              contentStructure: { type: "STRING" },
+              rawContentText: { type: "STRING" },
+              excelSheets: {
+                type: "ARRAY",
+                items: {
+                  type: "OBJECT",
+                  properties: {
+                    sheetName: { type: "STRING" },
+                    headers: { type: "ARRAY", items: { type: "STRING" } },
+                    rows: { 
+                      type: "ARRAY", 
+                      items: { 
+                        type: "ARRAY", 
+                        items: { type: "STRING" } 
+                      } 
+                    }
+                  },
+                  required: ["sheetName", "headers", "rows"]
+                }
+              }
+            },
+            required: ["fileName", "fileType", "description"]
+          }
+        },
+        evaluationCriteria: {
+          type: "ARRAY",
+          items: {
+            type: "OBJECT",
+            properties: {
+              taskTitle: { type: "STRING" },
+              criteriaName: { type: "STRING" },
+              points: { type: "INTEGER" },
+              guidelines: { type: "STRING" }
+            },
+            required: ["taskTitle", "criteriaName", "points", "guidelines"]
+          }
+        },
+        generalTipsForTeacher: { type: "STRING" },
+        officialSolutionSummary: { type: "STRING" }
+      },
+      required: [
+        "title", 
+        "vendor", 
+        "certificationName", 
+        "durationMinutes", 
+        "scenario", 
+        "requirements", 
+        "tasks", 
+        "providedFiles",
+        "evaluationCriteria", 
+        "generalTipsForTeacher",
+        "officialSolutionSummary"
+      ]
+    }
+  };
+
+  const result = await fetchFromAI("/api/ai/generic", { prompt, config });
+  return JSON.parse(result.text);
+};
+
+
+export const optimizePracticalExamRubricsAI = async (
+  sheet: PracticalExamSheet
+): Promise<any[]> => {
+  const prompt = `Tu es une IA experte qui audits et optimise les barèmes d'évaluation académique d'examens pratiques de certification IT et Bureautique (Cisco, Microsoft, Linux, Excel, etc.).
+  Donné le sujet d'examen pratique suivant, analyse sa grille actuelle et propose une version améliorée et TRÈS rigoureuse de la grille de critères de correction (evaluationCriteria).
+  Pour chaque tâche, fragmente les points de manière ultra professionnelle en prévoyant :
+  - Des critères standards importants (+ points)
+  - Des indicateurs de vérification extrêmement précis (ex: commandes CLI exactes à tester, vérifications de formules de cellules Excel, validation de scripts)
+  - Des critères de pénalités ou d'erreurs critiques/bloquantes (ex: configuration causant une coupure de liaison, script avec syntaxe invalide) avec des pénalités décisives (ex: -2 points ou -5 points).
+  
+  Voici le sujet d'examen :
+  Titre d'examen: ${sheet.title}
+  Certification: ${sheet.certificationName}
+  Tâches à réaliser:
+  ${sheet.tasks.map((t, idx) => `Tâche ${idx+1}: ${t.title} (${t.points} pts) - Description: ${t.description}`).join('\n')}
+  
+  Grille actuelle à optimiser :
+  ${sheet.evaluationCriteria.map((c, idx) => `- Tâche associée: ${c.taskTitle} / Nom: ${c.criteriaName} / Points: ${c.points} / Méthode: ${c.guidelines}`).join('\n')}
+  
+  Renvoie UNIQUEMENT un tableau d'objets JSON valide représentant la grille optimisée sous le schéma demandé. Assure-toi que la somme totale des points de ces critères reste cohérente ou ré-équilibrée d'après le barème global de l'examen (total: ${sheet.tasks.reduce((sum, t) => sum + (t.points || 0), 0)} pts).
+  Chaque critère doit avoir la structure JSON suivante :
+  - taskTitle: le titre de la tâche associée
+  - criteriaName: le critère de correction précis
+  - points: la note (entier positif ou négatif pour les pénalités/erreurs bloquantes)
+  - guidelines: la méthode de test ou l'indicateur d'évaluation pour le formateur`;
+
+  const config = {
+    responseMimeType: "application/json",
+    responseSchema: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: {
+          taskTitle: { type: "STRING" },
+          criteriaName: { type: "STRING" },
+          points: { type: "INTEGER" },
+          guidelines: { type: "STRING" }
+        },
+        required: ["taskTitle", "criteriaName", "points", "guidelines"]
+      }
+    }
+  };
+
+  const result = await fetchFromAI("/api/ai/generic", { prompt, config });
+  return JSON.parse(result.text);
+};
+
+
+export const generateCandidatePracticalFeedbackAI = async (
+  examTitle: string,
+  totalPoints: number,
+  candidateName: string,
+  candidateGroup: string,
+  score: number,
+  criteriaResults: { criteriaName: string; maxPoints: number; pointsAwarded: number; guidelines: string }[]
+): Promise<string> => {
+  const prompt = `Tu es un formateur académique ou examinateur professionnel. Rédige un feedback pédagogique personnalisé, professionnel et constructif, entièrement rédigé en français, destiné au candidat suivant pour son épreuve pratique.
+  
+  Informations de l'épreuve :
+  - Examen : "${examTitle}"
+  - Candidat : "${candidateName}" (Groupe : "${candidateGroup}")
+  - Score obtenu : ${score} / ${totalPoints} points d'évaluation
+  
+  Détails de l'évaluation par critère de la grille de correction :
+  ${criteriaResults.map(r => `- Critère: "${r.criteriaName}" | Score attribué: ${r.pointsAwarded}/${r.maxPoints} pts | Directives: "${r.guidelines}"`).join('\n')}
+  
+  Consignes de rédaction :
+  1. Félicite chaleureusement le candidat pour ses points forts s'il a d'excellents résultats, ou encourage-le à persévérer avec optimisme s'il a commis des erreurs.
+  2. Fournis des pistes d'amélioration technique extrêmement concrètes, en te basant sur les critères spécifiques où le candidat a perdu des points (pointsAwarded < maxPoints).
+  3. Indique-lui clairement les concepts ou modules de cours à revoir pour ses prochaines sessions de révisions.
+  4. Le style doit être bienveillant, constructif, digne d'un professeur d'ingénierie ou de bureautique d'excellence. Rédige un texte bien structuré d'environ 3 à 5 paragraphes, utilisant des listes à puces si cela clarifie l'explication.
+  
+  Réponds directement avec le texte du feedback d'évaluation, sans fioritures ni balises markdown d'introduction ou de conclusion superflues.`;
+
+  const config = {
+    responseMimeType: "text/plain"
+  };
+
+  const result = await fetchFromAI("/api/ai/generic", { prompt, config });
+  return result.text;
+};
+
 

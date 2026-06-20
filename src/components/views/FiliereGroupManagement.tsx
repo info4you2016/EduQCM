@@ -11,6 +11,7 @@ import { Modal } from '../ui/Modal';
 import { EmptyState } from '../ui/EmptyState';
 import { BulkImportStudents } from '../sections/BulkImportStudents';
 import { toast } from 'react-hot-toast';
+import { useConfirm } from '../ui/ConfirmDialog';
 
 export const StudentListModal = React.memo(({ group, onClose }: { group: Group; onClose: () => void }) => {
   const [students, setStudents] = useState<any[]>([]);
@@ -215,6 +216,7 @@ export const GroupForm = ({ filieres, initialData, onComplete }: { filieres: Fil
 };
 
 export const FiliereGroupManagement = ({ filieres, groups, onRefresh, mode = 'all' }: { filieres: Filiere[]; groups: Group[]; onRefresh: () => void; mode?: 'all' | 'filieres' | 'groups' }) => {
+  const confirm = useConfirm();
   const [isAddingFiliere, setIsAddingFiliere] = useState(false);
   const [isAddingGroup, setIsAddingGroup] = useState(false);
   const [editingFiliere, setEditingFiliere] = useState<Filiere | null>(null);
@@ -257,10 +259,17 @@ export const FiliereGroupManagement = ({ filieres, groups, onRefresh, mode = 'al
   }, [groupsWithFiliere.length, totalGroupPages, groupPage]);
 
   const handleDeleteFiliere = async (id: number) => {
-    if (!confirm("Voulez-vous vraiment supprimer cette filière ?")) return;
+    const ok = await confirm({
+      title: "Supprimer la filière",
+      message: "Voulez-vous vraiment supprimer cette filière ? Attention, cela supprimera tous les groupes associés à cette filière et dissociera les étudiants, les modules et les notifications liés.",
+      confirmLabel: "Supprimer",
+      cancelLabel: "Annuler",
+      variant: "danger"
+    });
+    if (!ok) return;
     try {
       await api.filieres.delete(id);
-      toast.success("Filière supprimée avec succès");
+      toast.success("Filière et ses dépendances supprimées avec succès");
       onRefresh();
     } catch (err: any) {
       toast.error(err.message || "Impossible de supprimer la filière");
@@ -268,7 +277,14 @@ export const FiliereGroupManagement = ({ filieres, groups, onRefresh, mode = 'al
   };
 
   const handleDeleteGroup = async (id: number) => {
-    if (!confirm("Voulez-vous vraiment supprimer ce groupe ?")) return;
+    const ok = await confirm({
+      title: "Supprimer le groupe",
+      message: "Voulez-vous vraiment supprimer ce groupe ?",
+      confirmLabel: "Supprimer",
+      cancelLabel: "Annuler",
+      variant: "danger"
+    });
+    if (!ok) return;
     try {
       await api.groups.delete(id);
       toast.success("Groupe supprimé avec succès");
@@ -320,7 +336,17 @@ export const FiliereGroupManagement = ({ filieres, groups, onRefresh, mode = 'al
                             {f.niveau}
                           </span>
                         )}
-                        {f.description && <p className="text-xs text-slate-500 line-clamp-1">{f.description}</p>}
+                      </div>
+                      <div className="mb-3">
+                        {f.description && f.description.trim() ? (
+                          <p className="text-xs text-slate-600 leading-relaxed max-w-2xl bg-slate-50/50 p-2.5 rounded-xl border border-dashed border-slate-100 whitespace-pre-wrap">
+                            {f.description}
+                          </p>
+                        ) : (
+                          <p className="text-xs text-slate-400 italic bg-amber-50/20 px-2.5 py-1.5 rounded-lg border border-dashed border-amber-100/40 inline-block font-medium">
+                            (Aucune description renseignée)
+                          </p>
+                        )}
                       </div>
                       <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Créée le {new Date(f.createdAt).toLocaleDateString()}</p>
                     </div>

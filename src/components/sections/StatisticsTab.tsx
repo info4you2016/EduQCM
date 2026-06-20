@@ -172,9 +172,13 @@ export const StatisticsTab = ({
                                     {exam?.type && (
                                       <span className={cn(
                                         "text-[8px] font-black px-1.5 py-0.5 rounded uppercase tracking-widest",
-                                        exam.type === 'fin-de-module' ? "bg-purple-50 text-purple-600" : "bg-blue-50 text-blue-600"
+                                        exam.type === 'fin-de-module' 
+                                          ? "bg-purple-50 text-purple-600" 
+                                          : exam.type === 'controle-continu'
+                                            ? "bg-blue-50 text-blue-600"
+                                            : "bg-amber-50 text-amber-600"
                                       )}>
-                                        {exam.type === 'fin-de-module' ? 'EFM' : 'CC'}
+                                        {exam.type === 'fin-de-module' ? 'EFM' : exam.type === 'controle-continu' ? 'CC' : 'Autre'}
                                       </span>
                                     )}
                                   </div>
@@ -252,9 +256,13 @@ export const StatisticsTab = ({
                                 {exam.type && (
                                   <div className={cn(
                                     "px-2 py-0.5 rounded-lg text-[9px] font-black uppercase tracking-widest border shadow-sm",
-                                    exam.type === 'fin-de-module' ? "bg-purple-50 text-purple-600 border-purple-100" : "bg-blue-50 text-blue-600 border-blue-100"
+                                    exam.type === 'fin-de-module' 
+                                      ? "bg-purple-50 text-purple-600 border-purple-100" 
+                                      : exam.type === 'controle-continu'
+                                        ? "bg-blue-50 text-blue-600 border-blue-100"
+                                        : "bg-amber-50 text-amber-600 border-amber-100"
                                   )}>
-                                    {exam.type === 'fin-de-module' ? 'Fin de Module' : 'Contrôle Continu'}
+                                    {exam.type === 'fin-de-module' ? 'Fin de Module' : exam.type === 'controle-continu' ? 'Contrôle Continu' : 'Autre (Personnalisé)'}
                                   </div>
                                 )}
                               </div>

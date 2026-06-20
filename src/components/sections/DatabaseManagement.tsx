@@ -24,13 +24,17 @@ import {
   Filter,
   Terminal,
   Eye,
-  Users
+  Users,
+  Wifi,
+  Server,
+  Globe
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { api } from '../../lib/api';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
 import { toast } from 'react-hot-toast';
+import { useConfirm } from '../ui/ConfirmDialog';
 
 interface DiagnosticData {
   integrity: string;
@@ -44,14 +48,23 @@ interface DiagnosticData {
     results: number;
     logs: number;
   };
+  supabaseEnabled?: boolean;
+  supabaseRestMode?: boolean;
+  supabaseUrl?: string | null;
+  writeQueueLength?: number;
+  connectionPoolActive?: boolean;
 }
 
 export const DatabaseManagement = () => {
+  const confirm = useConfirm();
   const [isRestoring, setIsRestoring] = useState(false);
   const [isOptimizing, setIsOptimizing] = useState(false);
-  const [exportFormat, setExportFormat] = useState<'db' | 'zip'>('zip');
+  const [exportFormat, setExportFormat] = useState<'json' | 'zip'>('zip');
   const [diagnostic, setDiagnostic] = useState<DiagnosticData | null>(null);
   const [loadingDiagnostic, setLoadingDiagnostic] = useState(false);
+  const [isPushingSupabase, setIsPushingSupabase] = useState(false);
+  const [latencyValue, setLatencyValue] = useState<number | null>(null);
+  const [isTestingLatency, setIsTestingLatency] = useState(false);
   
   // Drag & drop restore state
   const [pendingFile, setPendingFile] = useState<File | null>(null);
@@ -59,6 +72,11 @@ export const DatabaseManagement = () => {
   const [confirmCheckbox, setConfirmCheckbox] = useState(false);
   const [confirmTextInput, setConfirmTextInput] = useState('');
   const [restoreCountdown, setRestoreCountdown] = useState<number | null>(null);
+
+  // States for database wiping (vider la base de données)
+  const [isWiping, setIsWiping] = useState(false);
+  const [wipeConfirmCheckbox, setWipeConfirmCheckbox] = useState(false);
+  const [wipeConfirmTextInput, setWipeConfirmTextInput] = useState('');
 
   // Custom states for Scheduled Automatic Backups
   const [settings, setSettings] = useState<any>(null);
@@ -116,7 +134,7 @@ export const DatabaseManagement = () => {
   // Advanced Visual Loading States State
   const [progress, setProgress] = useState<{
     isActive: boolean;
-    type: 'optimize' | 'restore' | 'backup_manual' | 'backup_auto' | null;
+    type: 'optimize' | 'restore' | 'backup_manual' | 'backup_auto' | 'wipe' | null;
     title: string;
     description: string;
     steps: string[];
@@ -138,7 +156,7 @@ export const DatabaseManagement = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const startProgress = (
-    type: 'optimize' | 'restore' | 'backup_manual' | 'backup_auto', 
+    type: 'optimize' | 'restore' | 'backup_manual' | 'backup_auto' | 'wipe', 
     title: string, 
     description: string, 
     steps: string[]
@@ -208,7 +226,7 @@ export const DatabaseManagement = () => {
     return 'other';
   };
 
-  // Fetch SQLite diagnostics
+  // Fetch database diagnostics
   const fetchDiagnostics = async () => {
     setLoadingDiagnostic(true);
     try {
@@ -217,10 +235,57 @@ export const DatabaseManagement = () => {
       if (api.cache) {
         setCacheStats(api.cache.getStats());
       }
+      if (data && data.supabaseEnabled) {
+        api.admin.testLatency().then(res => {
+          if (res && res.success) {
+            setLatencyValue(res.latency);
+          }
+        }).catch(() => {});
+      }
     } catch (error) {
       console.error("Failed to load db diagnostics:", error);
     } finally {
       setLoadingDiagnostic(false);
+    }
+  };
+
+  const handleTestLatency = async () => {
+    setIsTestingLatency(true);
+    try {
+      const res = await api.admin.testLatency();
+      if (res && res.success) {
+        setLatencyValue(res.latency);
+        toast.success(`Test de connexion réussi ! Latence : ${res.latency} ms`);
+      } else {
+        toast.error(res?.error || "Impossible de mesurer la latence.");
+      }
+    } catch (err: any) {
+      toast.error("Erreur de connexion : " + (err.message || "Serveur injoignable"));
+    } finally {
+      setIsTestingLatency(false);
+    }
+  };
+
+  const handlePushToSupabase = async () => {
+    const isConfirmed = await confirm({
+      title: "Restauration Forcée vers Supabase",
+      message: "Êtes-vous sûr de vouloir écraser toutes les tables de la base de données distante Supabase avec vos données locales actuelles ? Cette opération supprimera les anciennes données sur Supabase pour correspondre exactement à votre état en mémoire tampon.",
+      confirmText: "Oui, restaurer vers Supabase",
+      cancelText: "Annuler",
+    });
+
+    if (!isConfirmed) return;
+
+    setIsPushingSupabase(true);
+    try {
+      const res = await api.admin.pushToSupabase();
+      toast.success(res.message || "La base de données locale a été restaurée à Supabase avec succès !");
+      fetchDiagnostics();
+    } catch (err: any) {
+      console.error(err);
+      toast.error(err.message || "Échec de l'envoi/restauration vers Supabase.");
+    } finally {
+      setIsPushingSupabase(false);
     }
   };
 
@@ -305,7 +370,7 @@ export const DatabaseManagement = () => {
     const steps = [
       "Sécurisation de la session administrateur...",
       "Vérification des quotas de stockage disque...",
-      "Lancement de la réplication à chaud SQLite...",
+      "Lancement de la réplication de la base à chaud...",
       "Compression binaire en direct...",
       "Application de la politique de rétention...",
       "Synchronisation finale du planificateur..."
@@ -339,7 +404,14 @@ export const DatabaseManagement = () => {
   };
 
   const handleDeleteBackup = async (filename: string) => {
-    if (!window.confirm(`Êtes-vous sûr de vouloir supprimer définitivement la sauvegarde "${filename}" ?`)) {
+    const ok = await confirm({
+      title: "Supprimer la sauvegarde",
+      message: `Êtes-vous sûr de vouloir supprimer définitivement la sauvegarde "${filename}" ?`,
+      confirmLabel: "Supprimer",
+      cancelLabel: "Annuler",
+      variant: "danger"
+    });
+    if (!ok) {
       return;
     }
     try {
@@ -366,7 +438,7 @@ export const DatabaseManagement = () => {
       "Vérification de la somme de contrôle...",
       "Sauvegarde de secours des paramètres actuels...",
       "Remplacement à plat des tables d'évaluation...",
-      "Validation de l'index d'intégrité SQLite...",
+      "Validation de l'index d'intégrité de la base...",
       "Redémarrage logiciel de l'application..."
     ];
 
@@ -408,8 +480,8 @@ export const DatabaseManagement = () => {
       'backup_manual',
       'Génération de l\'Exportation',
       exportFormat === 'zip'
-        ? "Création d'une archive ZIP complète contenant les CSV éditables et le dashboard offline."
-        : "Extraction d'un fichier miroir unifié .db de la plateforme.",
+        ? "Création d'une archive ZIP complète contenant les CSV éditables, l'instantané de la base de données et le dashboard offline."
+        : "Extraction d'un fichier instantané unifié au format portable .json.",
       steps
     );
 
@@ -434,15 +506,15 @@ export const DatabaseManagement = () => {
 
     const steps = [
       "Suspension temporaire et libération des verrous de requêtes...",
-      "Analyse de la fragmentation physique du fichier sqlite...",
-      "Exécution de la directive système VACUUM...",
+      "Analyse de la structure physique de la base de données...",
+      "Exécution de la directive de nettoyage et de défragmentation...",
       "Reconstruction complète des index de recherche QCM...",
       "Mise à jour instantanée du diagnostic de santé..."
     ];
 
     const ctrl = startProgress(
       'optimize',
-      'Optimisation Structurelle SQLite',
+      'Optimisation Structurelle de la Base',
       "Le système procède à un compactage complet pour libérer de l'espace disque et accélérer la recherche.",
       steps
     );
@@ -463,8 +535,8 @@ export const DatabaseManagement = () => {
 
   const initiateRestore = (file: File) => {
     const ext = file.name.split('.').pop()?.toLowerCase();
-    if (ext !== 'db' && ext !== 'zip') {
-      toast.error("Format invalide. Seuls les fichiers .db et .zip sont acceptés.");
+    if (ext !== 'json' && ext !== 'zip') {
+      toast.error("Format invalide. Seuls les fichiers .json et .zip sont acceptés.");
       return;
     }
     setPendingFile(file);
@@ -511,11 +583,56 @@ export const DatabaseManagement = () => {
       }, 1500);
     } catch (error: any) {
       console.error("Restore failed:", error);
-      ctrl.fail(error?.message || "Le fichier importé n'est pas une base sqlite valide ou son archive est corrompue.");
+      ctrl.fail(error?.message || "Le fichier importé n'est pas une sauvegarde valide ou son archive est corrompue.");
     } finally {
       setIsRestoring(false);
       setPendingFile(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const executeWipeDatabase = async () => {
+    setIsWiping(true);
+
+    const steps = [
+      "Vérification des habilitations d'administration supérieure...",
+      "Désactivation temporaire des contrôles d'intégrité référentielle (PRAGMA)...",
+      "Purge des tableaux de résultats et des sessions d'examens...",
+      "Purge des examens et des modules d'apprentissage...",
+      "Suppression des messages de chat, réactions et commentaires...",
+      "Suppression des notifications et des liaisons utilisateurs...",
+      "Purge des classes, filières et de tous les comptes élèves/professeurs...",
+      "Mise à jour et synchronisation automatique de l'état purgé sur Supabase...",
+      "Ré-indexation et recalcul instantané des statistiques et diagnostics..."
+    ];
+
+    const ctrl = startProgress(
+      'wipe',
+      'Vidage de la Base Active',
+      "Le système procède à une réinitialisation complète de tous les registres de la plateforme scolaire.",
+      steps
+    );
+
+    try {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      const res = await api.admin.clearDatabase();
+      await fetchDiagnostics();
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      ctrl.finish();
+      toast.success(res?.message || "La base de données active a été purgée et synchronisée avec Supabase !");
+      
+      // Reset confirming inputs
+      setWipeConfirmCheckbox(false);
+      setWipeConfirmTextInput('');
+      
+      // Refresh backups & logs list if present
+      const backups = await api.admin.getAutoBackups();
+      setAutoBackups(backups);
+    } catch (error: any) {
+      console.error("Wipe failed:", error);
+      ctrl.fail(error?.message || "Échec lors du processus de vidage de la base de données.");
+    } finally {
+      setIsWiping(false);
     }
   };
 
@@ -625,7 +742,7 @@ export const DatabaseManagement = () => {
               <div className="flex items-center justify-between">
                 <h4 className="font-extrabold text-slate-800 text-sm uppercase tracking-tight flex items-center gap-2">
                   <div className="w-1.5 h-3.5 bg-emerald-500 rounded-full" />
-                  Index Diagnostic SQLite & Santé
+                  "Index Diagnostic Supabase & Santé"
                 </h4>
                 <button 
                   onClick={fetchDiagnostics} 
@@ -675,7 +792,9 @@ export const DatabaseManagement = () => {
                         )}
                       </div>
                       <div>
-                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Intégrité SQLite</p>
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                          "Intégrité de la Base"
+                        </p>
                         <p className={`text-sm font-black mt-0.5 uppercase ${
                           diagnostic?.integrity === 'ok' ? 'text-emerald-600' : 'text-amber-600'
                         }`}>
@@ -770,7 +889,7 @@ export const DatabaseManagement = () => {
                         <Sparkles className="w-3.5 h-3.5 text-emerald-500" />
                         Maintenance recommandée
                       </h5>
-                      <p className="text-[10px] text-emerald-700/80 font-medium">Reconstruisez les index et libérez de l'espace disque résiduel inutile (SQLite VACUUM).</p>
+                      <p className="text-[10px] text-emerald-700/80 font-medium">Reconstruisez les index et libérez de l'espace de stockage résiduel inutile de la base.</p>
                     </div>
                     <Button 
                       onClick={handleOptimize}
@@ -791,6 +910,139 @@ export const DatabaseManagement = () => {
                 </div>
               )}
             </Card>
+
+            {/* Supabase Supervision Card */}
+            {diagnostic?.supabaseEnabled && (
+              <Card className="p-6 border-2 border-slate-50 bg-white shadow-sm space-y-6" id="supabase-management-card">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                  <div className="space-y-1">
+                    <h4 className="font-extrabold text-slate-800 text-sm uppercase tracking-tight flex items-center gap-2">
+                      <Database className="w-4 h-4 text-sky-500" />
+                      Supervision Réseau & Synchronisation Supabase
+                    </h4>
+                    <p className="text-xs text-slate-400">Suivi détaillé des flux de synchronisation, état des endpoints, latence et mode de connexion actif.</p>
+                  </div>
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-sky-50 text-sky-700 border border-sky-100">
+                    <span className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sky-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-sky-500"></span>
+                    </span>
+                    Connecté
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {/* Endpoint/Mode Card */}
+                  <div className="p-4 rounded-xl border border-slate-100 bg-slate-50/50 space-y-2">
+                    <div className="flex items-center gap-2 text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                      <Globe className="w-3.5 h-3.5 text-slate-400" />
+                      Endpoint & Mode
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs font-black text-slate-800">
+                        {diagnostic?.supabaseRestMode ? "Mode API REST (PostgREST)" : "Mode Connexion Directe (pg)"}
+                      </p>
+                      <p className="text-[10px] font-mono text-slate-500 truncate" title={diagnostic?.supabaseUrl || "Inconnu"}>
+                        {diagnostic?.supabaseUrl || "Lien PostgreSQL Direct"}
+                      </p>
+                      <span className="inline-block px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase bg-indigo-50 text-indigo-700 border border-indigo-100">
+                        {diagnostic?.supabaseRestMode ? "Synchronisation HTTPS" : "Pool TCP/IP Actif"}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Latency Tester Card */}
+                  <div className="p-4 rounded-xl border border-slate-100 bg-slate-50/50 flex flex-col justify-between space-y-2">
+                    <div className="flex items-center gap-2 text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                      <Wifi className="w-3.5 h-3.5 text-slate-400" />
+                      Latence réseau
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        {latencyValue === null ? (
+                          <span className="text-xs font-bold text-slate-400 italic font-mono">Non mesurée</span>
+                        ) : (
+                          <div className="flex items-baseline gap-1">
+                            <span className={`text-xl font-black ${
+                              latencyValue < 85 ? 'text-emerald-500' : latencyValue < 250 ? 'text-amber-500' : 'text-rose-500'
+                            }`}>
+                              {latencyValue}
+                            </span>
+                            <span className="text-[10px] font-bold text-slate-400 font-mono">ms</span>
+                          </div>
+                        )}
+                      </div>
+                      <Button
+                        onClick={handleTestLatency}
+                        disabled={isTestingLatency}
+                        variant="outline"
+                        className="py-1 px-2.5 h-7 text-[9px] uppercase font-black tracking-wider border-slate-200 text-slate-700 hover:text-indigo-600 hover:bg-slate-50"
+                      >
+                        {isTestingLatency ? <Loader2 className="w-3 h-3 animate-spin" /> : "Tester"}
+                      </Button>
+                    </div>
+                    {latencyValue !== null && (
+                      <p className="text-[9px] font-bold text-slate-400">
+                        {latencyValue < 85 ? "● Statut : Excellent" : latencyValue < 250 ? "● Statut : Standard" : "● Statut : Ralenti"}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Queue Stats Card */}
+                  <div className="p-4 rounded-xl border border-slate-100 bg-slate-50/50 space-y-2">
+                    <div className="flex items-center gap-2 text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                      <Server className="w-3.5 h-3.5 text-slate-400" />
+                      Tampon de Réplication
+                    </div>
+                    <div className="space-y-1">
+                      <div className="flex items-baseline gap-1">
+                        <span className={`text-xl font-black ${
+                          (diagnostic?.writeQueueLength || 0) === 0 ? 'text-emerald-500' : 'text-amber-500'
+                        }`}>
+                          {diagnostic?.writeQueueLength ?? 0}
+                        </span>
+                        <span className="text-[10px] font-bold text-slate-400">requête(s) en attente</span>
+                      </div>
+                      <p className="text-[9px] text-slate-400 font-medium leading-relaxed">
+                        {(diagnostic?.writeQueueLength || 0) === 0 
+                          ? "Toutes les écritures locales sont répliquées." 
+                          : "Synchronisation automatique en tâche de fond..."}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Database Force Pull & Sync Actions */}
+                <div className="p-4 bg-sky-50/30 border border-sky-100 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4">
+                  <div className="space-y-1 text-center sm:text-left">
+                    <h5 className="text-xs font-black text-sky-950 flex items-center justify-center sm:justify-start gap-1">
+                      <Database className="w-3.5 h-3.5 text-sky-600" />
+                      Restauration Forcée & Alignement de Schéma
+                    </h5>
+                    <p className="text-[10px] text-sky-850/85 font-medium">
+                      Écrasez l'intégralité du schéma Supabase par les données en mémoire de secours afin de réaligner l'état physique distant de votre école.
+                    </p>
+                  </div>
+                  <Button 
+                    onClick={handlePushToSupabase}
+                    disabled={isPushingSupabase}
+                    variant="outline"
+                    className="py-2.5 px-4 text-[10px] font-black uppercase tracking-wider border-sky-200 text-sky-800 bg-white hover:bg-sky-50 transition-all shadow-sm w-full sm:w-auto flex items-center justify-center gap-1.5"
+                    id="btn-push-supabase"
+                  >
+                    {isPushingSupabase ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" /> Alignement...
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5" /> Synchroniser vers Supabase
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </Card>
+            )}
 
             {/* Cache Chirurgical Panel */}
             <Card className="p-6 border-2 border-slate-50 bg-white shadow-sm space-y-6" id="client-cache-card">
@@ -872,7 +1124,7 @@ export const DatabaseManagement = () => {
         )}
 
         {activeTab === 'manual' && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8" id="manual-tab">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8" id="manual-tab">
             {/* Export Settings Card */}
             <Card className="p-6 border-2 border-slate-50 shadow-sm bg-white flex flex-col justify-between space-y-6" id="export-card">
               <div className="space-y-6">
@@ -917,27 +1169,27 @@ export const DatabaseManagement = () => {
                       </div>
                     </div>
 
-                    {/* Mode standard SQLite .db */}
+                    {/* Mode standard JSON */}
                     <div 
-                      onClick={() => setExportFormat('db')}
+                      onClick={() => setExportFormat('json')}
                       className={`p-3.5 rounded-xl border-2 cursor-pointer transition-all ${
-                        exportFormat === 'db' 
+                        exportFormat === 'json' 
                           ? 'border-indigo-500 bg-indigo-50/20' 
                           : 'border-slate-100 hover:border-slate-200 bg-white'
                       }`}
-                      id="export-format-db"
+                      id="export-format-json"
                     >
                       <div className="flex items-start gap-3">
                         <input 
                           type="radio" 
                           name="format" 
-                          checked={exportFormat === 'db'}
-                          onChange={() => setExportFormat('db')}
+                          checked={exportFormat === 'json'}
+                          onChange={() => setExportFormat('json')}
                           className="mt-1 accent-indigo-600"
                         />
                         <div className="space-y-0.5">
-                          <p className="text-xs font-black text-slate-800">Fichier binaire SQLite (.db)</p>
-                          <p className="text-[10px] text-slate-400 font-medium leading-relaxed">Fichier binaire standard contenant la base sqlite brute, indispensable pour vos opérations de sauvegarde à plat.</p>
+                          <p className="text-xs font-black text-slate-800">Instantané Portable (JSON)</p>
+                          <p className="text-[10px] text-slate-400 font-medium leading-relaxed">Fichier texte standard structuré contenant un instantané complet de votre base de données, compatible Supabase.</p>
                         </div>
                       </div>
                     </div>
@@ -951,7 +1203,7 @@ export const DatabaseManagement = () => {
                 id="btn-execute-export"
               >
                 <Download className="w-4 h-4" /> 
-                {exportFormat === 'zip' ? "Exporter l'Archive complète" : "Exporter le fichier .db"}
+                {exportFormat === 'zip' ? "Exporter l'Archive complète" : "Exporter l'Instantané JSON"}
               </Button>
             </Card>
 
@@ -1002,7 +1254,7 @@ export const DatabaseManagement = () => {
                       </div>
                       <div className="space-y-1">
                         <p className="text-xs font-black text-slate-700 uppercase tracking-wide">Faites glisser votre fichier ici</p>
-                        <p className="text-[10px] text-slate-400 leading-normal">ou cliquez pour sélectionner un fichier (.db, .zip)</p>
+                        <p className="text-[10px] text-slate-400 leading-normal">ou cliquez pour sélectionner un fichier (.json, .zip)</p>
                       </div>
                     </div>
                   </>
@@ -1016,7 +1268,7 @@ export const DatabaseManagement = () => {
                       <div className="text-left font-mono text-[10px] text-slate-600 space-y-1 bg-white/80 p-3 rounded-xl border border-amber-100/50">
                         <p><span className="font-extrabold text-slate-400">Nom :</span> {pendingFile.name}</p>
                         <p><span className="font-extrabold text-slate-400">Taille :</span> {formatSize(pendingFile.size)}</p>
-                        <p><span className="font-extrabold text-slate-400">Type détecté :</span> {pendingFile.name.endsWith('.zip') ? 'Archive unifiée (.zip)' : 'Base binaire brute (.db)'}</p>
+                        <p><span className="font-extrabold text-slate-400">Type détecté :</span> {pendingFile.name.endsWith('.zip') ? 'Archive unifiée (.zip)' : 'Instantané unifié (.json)'}</p>
                       </div>
                     </div>
 
@@ -1086,12 +1338,82 @@ export const DatabaseManagement = () => {
                       ref={fileInputRef} 
                       onChange={handleRestore} 
                       className="hidden" 
-                      accept=".db,.zip"
+                      accept=".json,.zip"
                       id="file-import-input"
                     />
-                    <p className="text-[9px] text-slate-400 text-center font-bold uppercase tracking-wider">Accepte les fichiers .db ou archives complètes .zip</p>
+                    <p className="text-[9px] text-slate-400 text-center font-bold uppercase tracking-wider">Accepte les fichiers .json ou archives complètes .zip</p>
                   </>
                 )}
+              </div>
+            </Card>
+
+            {/* Database Wipe / Vider la base Card */}
+            <Card className="p-6 border-2 border-rose-100 shadow-sm bg-white space-y-6 flex flex-col justify-between" id="wipe-card">
+              <div className="space-y-6">
+                <div className="space-y-1">
+                  <h4 className="font-extrabold text-rose-600 text-sm uppercase tracking-tight flex items-center gap-2">
+                    <div className="w-1.5 h-3.5 bg-rose-600 rounded-full animate-pulse" />
+                    Vidage de la base active (Wipe)
+                  </h4>
+                  <p className="text-xs text-slate-400">Purger l'intégralité du contenu dynamique et des élèves.</p>
+                </div>
+
+                <div className="p-4 bg-rose-50/50 border border-rose-100 rounded-2xl space-y-3">
+                  <p className="text-[10px] text-rose-700 leading-relaxed font-bold flex items-start gap-1.5">
+                    <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                    IMPORTANT : Cette opération va supprimer définitivement l'ensemble des cours, filières, classes, élèves, formateurs, examens, notes (résultats), messages de discussion et journaux. 
+                  </p>
+                  <p className="text-[10px] text-slate-500 leading-normal font-semibold">
+                    Seuls vos comptes d'administrateurs généraux et les configurations de personnalisation de l'OFPPT visibles dans l'onglet des paramètres seront conservés. L'état purgé est répercuté automatiquement sur Supabase.
+                  </p>
+                </div>
+
+                <div className="bg-rose-50/30 border border-rose-100/60 p-4 rounded-2xl space-y-3">
+                  <p className="text-xs font-black text-rose-800 uppercase tracking-tight flex items-center gap-1.5 leading-none">
+                    <span className="h-2 w-2 rounded-full bg-rose-600 animate-ping shrink-0" />
+                    Validation de sécurité requise :
+                  </p>
+
+                  <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={wipeConfirmCheckbox}
+                      onChange={(e) => setWipeConfirmCheckbox(e.target.checked)}
+                      className="mt-0.5 rounded border-rose-300 text-rose-600 focus:ring-rose-500 w-3.5 h-3.5 accent-rose-600"
+                    />
+                    <span className="text-[10px] text-slate-700 font-bold leading-normal">
+                      Je confirme vouloir purger définitivement la base de données active ainsi que son miroir Supabase.
+                    </span>
+                  </label>
+
+                  <div className="space-y-1 pt-1">
+                    <p className="text-[10px] font-bold text-rose-900 uppercase tracking-wide">Saisissez le mot de confirmation "<span className="font-black underline select-all">DETRUIRE</span>" :</p>
+                    <input
+                      type="text"
+                      value={wipeConfirmTextInput}
+                      onChange={(e) => setWipeConfirmTextInput(e.target.value)}
+                      placeholder="Saisissez DETRUIRE..."
+                      className="w-full text-xs font-bold p-2.5 rounded-xl border border-rose-200 bg-white focus:outline-hidden focus:ring-2 focus:ring-rose-500/30 text-rose-700 uppercase"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <Button
+                  onClick={executeWipeDatabase}
+                  disabled={isWiping || !wipeConfirmCheckbox || wipeConfirmTextInput.toUpperCase() !== 'DETRUIRE'}
+                  className="w-full py-3.5 text-xs bg-rose-600 hover:bg-rose-700 text-white font-black uppercase tracking-wider disabled:opacity-45 disabled:hover:bg-rose-600 border-none shadow-xs flex items-center justify-center gap-2"
+                  id="btn-execute-wipe"
+                >
+                  {isWiping ? (
+                    <RefreshCw className="w-4 h-4 animate-spin text-white" />
+                  ) : (
+                    <Trash2 className="w-4 h-4" />
+                  )}
+                  {isWiping ? "Purge en cours..." : "Lancer le vidage de base"}
+                </Button>
+                <p className="text-[9px] text-slate-400 text-center font-bold uppercase tracking-wider">Supprime élèves et données en préservant l'accès administration supérieur</p>
               </div>
             </Card>
           </div>
@@ -1876,7 +2198,7 @@ export const DatabaseManagement = () => {
 
               <div className="space-y-3 px-2">
                 <p className="text-xs text-slate-600 leading-relaxed font-medium">
-                  Le moteur de l'application a interchangé la base de données SQLite à chaud avec succès.
+                  Le moteur de l'application a interchangé la base de données de manière dynamique à chaud avec succès.
                 </p>
                 <p className="text-[11px] text-slate-500 leading-normal font-semibold">
                   Pour votre sécurité et pour prévenir toute corruption de session locale (les comptes d'élèves et professeurs ayant été remplacés), vous serez déconnecté et votre session sera réinitialisée automatiquement.

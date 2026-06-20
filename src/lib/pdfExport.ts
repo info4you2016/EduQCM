@@ -790,7 +790,7 @@ export const generateExamPDF = async (
       .replace(/{{DATE}}/g, exam.scheduledAt ? new Date(exam.scheduledAt).toLocaleDateString('fr-FR') : new Date().toLocaleDateString('fr-FR'))
       .replace(/{{GROUPE}}/g, groupName || '')
       .replace(/{{DUREE}}/g, formatDuration(exam.durationMinutes))
-      .replace(/{{TYPE}}/g, exam.type === 'controle-continu' ? 'CC' : 'EFM')
+      .replace(/{{TYPE}}/g, exam.type === 'controle-continu' ? 'CC' : exam.type === 'fin-de-module' ? 'EFM' : 'Autre')
       .replace(/{{FILIERE}}/g, filiereName || '')
       .replace(/{{NIVEAU}}/g, filiereLevel || '')
       .replace(/{{ETABLISSEMENT}}/g, settings?.institutionName || '')
@@ -1107,9 +1107,25 @@ export const generateExamPDF = async (
         let vraiAns = '';
         let fauxAns = '';
         if (showAnswers) {
-          const isCorrectTrue = String(q.correctAnswer).toLowerCase() === 'true' || String(q.correctAnswer).toLowerCase() === 'vrai';
-          vraiAns = isCorrectTrue ? 'X' : '';
-          fauxAns = !isCorrectTrue ? 'X' : '';
+          const correctOpt = q.options?.find(o => o.isCorrect);
+          let isTrue = false;
+          let isFalse = false;
+
+          if (correctOpt) {
+            const normText = String(correctOpt.text).toLowerCase().trim();
+            isTrue = normText === 'vrai' || normText === 'true' || normText === 'v';
+            isFalse = normText === 'faux' || normText === 'false' || normText === 'f';
+          } else if (q.correctAnswer !== undefined && q.correctAnswer !== null) {
+            const ansStr = String(q.correctAnswer).toLowerCase().trim();
+            isTrue = ansStr === 'true' || ansStr === 'vrai' || ansStr === 'v';
+            isFalse = ansStr === 'false' || ansStr === 'faux' || ansStr === 'f';
+          } else if (q.correctOptionIndex !== undefined && q.correctOptionIndex !== null) {
+            isTrue = q.correctOptionIndex === 0;
+            isFalse = q.correctOptionIndex === 1;
+          }
+
+          vraiAns = isTrue ? 'X' : '';
+          fauxAns = isFalse ? 'X' : '';
         }
         return [cleanTFText, vraiAns, fauxAns];
       });
@@ -1471,8 +1487,12 @@ export const generateResultsPDF = async (
   doc.text(formatText(`LISTE DES PARTICIPANTS ET SCORES DE FIN D'EXAMEN`), 15, currentY);
   currentY += 4.5;
 
-  // Sort results descending by score for rankings
-  const sortedResults = [...results].sort((a, b) => b.score - a.score);
+  // Sort results alphabetically by trainee name
+  const sortedResults = [...results].sort((a, b) => {
+    const nameA = (a.studentName || '').trim().toLowerCase();
+    const nameB = (b.studentName || '').trim().toLowerCase();
+    return nameA.localeCompare(nameB, 'fr');
+  });
 
   const tableHeaders = ['Rang', 'Étudiant', 'Score', 'Pourcentage', 'Date de Passage'];
   const tableRows = sortedResults.map((res, i) => {

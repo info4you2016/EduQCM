@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { 
   TrendingUp, Users, Award, BookOpen, Sparkles, BrainCircuit, CheckCircle2, 
   Target, Activity, FileDown, Search, AlertTriangle, Loader2, ChevronRight, 
-  BarChart3, RefreshCw, Sparkle, Download, ShieldCheck
+  ChevronLeft, BarChart3, RefreshCw, Sparkle, Download, ShieldCheck
 } from 'lucide-react';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell 
@@ -35,6 +35,12 @@ export const SuiviAnalyseView = ({
   const [selectedGroupFilter, setSelectedGroupFilter] = useState<string>('all');
   const [selectedModuleFilter, setSelectedModuleFilter] = useState<string>('all');
   const [searchStudentQuery, setSearchStudentQuery] = useState<string>('');
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const itemsPerPage = 10;
+
+  React.useEffect(() => {
+    setCurrentPage(1);
+  }, [selectedGroupFilter, selectedModuleFilter, searchStudentQuery]);
 
   // AI Auditor States
   const [isAuditing, setIsAuditing] = useState(false);
@@ -73,6 +79,19 @@ export const SuiviAnalyseView = ({
       return true;
     });
   }, [results, exams, selectedGroupFilter, selectedModuleFilter, searchStudentQuery]);
+
+  // Sorted results list for sequential display
+  const sortedAndFiltered = useMemo(() => {
+    return [...filteredResults].sort((a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime());
+  }, [filteredResults]);
+
+  const totalPages = Math.ceil(sortedAndFiltered.length / itemsPerPage) || 1;
+  const activePage = Math.min(currentPage, totalPages);
+
+  const paginatedResults = useMemo(() => {
+    const startIndex = (activePage - 1) * itemsPerPage;
+    return sortedAndFiltered.slice(startIndex, startIndex + itemsPerPage);
+  }, [sortedAndFiltered, activePage, itemsPerPage]);
 
   // All distinct group names in current results or database groups
   const distinctGroupsList = useMemo(() => {
@@ -664,105 +683,179 @@ export const SuiviAnalyseView = ({
               </thead>
               
               <tbody className="divide-y divide-slate-100">
-                {filteredResults.length === 0 ? (
+                {paginatedResults.length === 0 ? (
                   <tr>
                     <td colSpan={7} className="px-8 py-12 text-center text-slate-400 font-bold">
                       Aucun résultat d'étudiant enregistré sous ces critères de filtrage.
                     </td>
                   </tr>
                 ) : (
-                  [...filteredResults]
-                    .sort((a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime())
-                    .map((item) => {
-                      const exam = exams.find(e => e.id === item.examId);
-                      const percentage = Math.round((item.score / (item.totalPoints || 1)) * 100);
-                      
-                      // Match styling of standard grades
-                      let tierLabel = 'Excellent';
-                      let tierClass = 'bg-emerald-50 text-emerald-700 border-emerald-100';
-                      if (percentage < 50) {
-                        tierLabel = 'Insuffisant';
-                        tierClass = 'bg-rose-50 text-rose-700 border-rose-100';
-                      } else if (percentage < 70) {
-                        tierLabel = 'Moyen';
-                        tierClass = 'bg-amber-50 text-amber-700 border-amber-100';
-                      } else if (percentage < 80) {
-                        tierLabel = 'Bien';
-                        tierClass = 'bg-blue-50 text-blue-700 border-blue-100';
-                      }
+                  paginatedResults.map((item) => {
+                    const exam = exams.find(e => e.id === item.examId);
+                    const percentage = Math.round((item.score / (item.totalPoints || 1)) * 100);
+                    
+                    // Match styling of standard grades
+                    let tierLabel = 'Excellent';
+                    let tierClass = 'bg-emerald-50 text-emerald-700 border-emerald-100';
+                    if (percentage < 50) {
+                      tierLabel = 'Insuffisant';
+                      tierClass = 'bg-rose-50 text-rose-700 border-rose-100';
+                    } else if (percentage < 70) {
+                      tierLabel = 'Moyen';
+                      tierClass = 'bg-amber-50 text-amber-700 border-amber-100';
+                    } else if (percentage < 80) {
+                      tierLabel = 'Bien';
+                      tierClass = 'bg-blue-50 text-blue-700 border-blue-100';
+                    }
 
-                      return (
-                        <tr key={item.id} className="group hover:bg-slate-50/50 transition-colors">
-                          {/* Student identity */}
-                          <td className="px-8 py-4">
-                            <div className="flex items-center gap-3">
-                              <div className="w-8 h-8 rounded-lg bg-indigo-50 border border-indigo-100 flex items-center justify-center text-[11px] font-black text-indigo-700 group-hover:scale-105 group-hover:bg-indigo-100 transition-all">
-                                {item.studentName ? item.studentName[0].toUpperCase() : 'S'}
-                              </div>
-                              <div className="flex flex-col">
-                                <span className="font-extrabold text-xs text-slate-800">{item.studentName || 'Anonyme'}</span>
-                                <span className="text-[9px] text-slate-400 font-medium">{item.studentEmail}</span>
-                              </div>
+                    return (
+                      <tr key={item.id} className="group hover:bg-slate-50/50 transition-colors">
+                        {/* Student identity */}
+                        <td className="px-8 py-4">
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-lg bg-indigo-50 border border-indigo-100 flex items-center justify-center text-[11px] font-black text-indigo-700 group-hover:scale-105 group-hover:bg-indigo-100 transition-all">
+                              {item.studentName ? item.studentName[0].toUpperCase() : 'S'}
                             </div>
-                          </td>
-
-                          {/* Student Class Group */}
-                          <td className="px-8 py-4">
-                            <span className="text-[10px] font-black text-slate-500 uppercase bg-slate-100 px-2 py-1 rounded">
-                              {item.groupName || exam?.groupName || 'N/A'}
-                            </span>
-                          </td>
-
-                          {/* Exam Title */}
-                          <td className="px-8 py-4">
                             <div className="flex flex-col">
-                              <span className="font-bold text-xs text-slate-700 truncate max-w-[180px]">{exam?.title || 'Examen Supprimé'}</span>
-                              <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wide">
-                                {modules.find(m => m.id === exam?.moduleId)?.name || 'N/A'}
-                              </span>
+                              <span className="font-extrabold text-xs text-slate-800">{item.studentName || 'Anonyme'}</span>
+                              <span className="text-[9px] text-slate-400 font-medium">{item.studentEmail}</span>
                             </div>
-                          </td>
+                          </div>
+                        </td>
 
-                          {/* Pure score */}
-                          <td className="px-8 py-4 text-center">
-                            <span className="font-extrabold text-xs text-slate-800">
-                              {item.score} <span className="opacity-40">/ {item.totalPoints}</span>
+                        {/* Student Class Group */}
+                        <td className="px-8 py-4">
+                          <span className="text-[10px] font-black text-slate-500 uppercase bg-slate-100 px-2 py-1 rounded">
+                            {item.groupName || exam?.groupName || 'N/A'}
+                          </span>
+                        </td>
+
+                        {/* Exam Title */}
+                        <td className="px-8 py-4">
+                          <div className="flex flex-col">
+                            <span className="font-bold text-xs text-slate-700 truncate max-w-[180px]">{exam?.title || 'Examen Supprimé'}</span>
+                            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wide">
+                              {modules.find(m => m.id === exam?.moduleId)?.name || 'N/A'}
                             </span>
-                          </td>
+                          </div>
+                        </td>
 
-                          {/* Progress Tier */}
-                          <td className="px-8 py-4 text-center">
-                            <span className={cn("px-2.5 py-1 rounded-lg text-[9px] font-black uppercase tracking-wider border", tierClass)}>
-                              {percentage}% • {tierLabel}
+                        {/* Pure score */}
+                        <td className="px-8 py-4 text-center">
+                          <span className="font-extrabold text-xs text-slate-800">
+                            {item.score} <span className="opacity-40">/ {item.totalPoints}</span>
+                          </span>
+                        </td>
+
+                        {/* Progress Tier */}
+                        <td className="px-8 py-4 text-center">
+                          <span className={cn("px-2.5 py-1 rounded-lg text-[9px] font-black uppercase tracking-wider border", tierClass)}>
+                            {percentage}% • {tierLabel}
+                          </span>
+                        </td>
+
+                        {/* Integrity indicator anti cheat warnings */}
+                        <td className="px-8 py-4 text-center">
+                          <div className="flex items-center justify-center gap-1.5">
+                            <span className={cn(
+                              "w-1.5 h-1.5 rounded-full",
+                              (item.integrityScore ?? 100) >= 80 ? "bg-emerald-500" : (item.integrityScore ?? 100) >= 50 ? "bg-amber-500 animate-pulse" : "bg-rose-500 animate-pulse"
+                            )} />
+                            <span className="text-[10px] font-black text-slate-600 uppercase">
+                              {(item.integrityScore ?? 100)}%
                             </span>
-                          </td>
+                          </div>
+                        </td>
 
-                          {/* Integrity indicator anti cheat warnings */}
-                          <td className="px-8 py-4 text-center">
-                            <div className="flex items-center justify-center gap-1.5">
-                              <span className={cn(
-                                "w-1.5 h-1.5 rounded-full",
-                                (item.integrityScore ?? 100) >= 80 ? "bg-emerald-500" : (item.integrityScore ?? 100) >= 50 ? "bg-amber-500 animate-pulse" : "bg-rose-500 animate-pulse"
-                              )} />
-                              <span className="text-[10px] font-black text-slate-600 uppercase">
-                                {(item.integrityScore ?? 100)}%
-                              </span>
-                            </div>
-                          </td>
-
-                          {/* Finished Date */}
-                          <td className="px-8 py-4 text-right">
-                            <span className="text-[10px] font-bold text-slate-400 uppercase">
-                              {new Date(item.completedAt).toLocaleDateString()}
-                            </span>
-                          </td>
-                        </tr>
-                      );
-                    })
+                        {/* Finished Date */}
+                        <td className="px-8 py-4 text-right">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase">
+                            {new Date(item.completedAt).toLocaleDateString()}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
           </div>
+
+          {/* Pagination Controls */}
+          {sortedAndFiltered.length > 0 && (
+            <div className="px-8 py-4 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-4 bg-slate-50/30">
+              <span className="text-[11px] font-bold text-slate-500">
+                Affichage de <span className="text-slate-800">{(activePage - 1) * itemsPerPage + 1}</span> à{" "}
+                <span className="text-slate-800">
+                  {Math.min(activePage * itemsPerPage, sortedAndFiltered.length)}
+                </span>{" "}
+                sur <span className="text-slate-800">{sortedAndFiltered.length}</span> résultats
+              </span>
+
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                  disabled={activePage === 1}
+                  className="h-8 px-3 text-[11px] font-extrabold text-slate-600 disabled:opacity-40"
+                  id="btn-prev-page"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5 mr-1" />
+                  Précédent
+                </Button>
+
+                {/* Page numbers list */}
+                <div className="flex items-center gap-1">
+                  {Array.from({ length: totalPages }, (_, i) => i + 1).map(page => {
+                    if (
+                      page === 1 ||
+                      page === totalPages ||
+                      Math.abs(page - activePage) <= 1
+                    ) {
+                      return (
+                        <button
+                          key={page}
+                          onClick={() => setCurrentPage(page)}
+                          className={cn(
+                            "w-8 h-8 rounded-lg text-xs font-extrabold transition-all",
+                            activePage === page
+                              ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/10"
+                              : "text-slate-500 hover:bg-slate-100"
+                          )}
+                          id={`btn-page-${page}`}
+                        >
+                          {page}
+                        </button>
+                      );
+                    } else if (
+                      (page === 2 && activePage > 3) ||
+                      (page === totalPages - 1 && activePage < totalPages - 2)
+                    ) {
+                      return (
+                        <span key={page} className="px-1 text-slate-400 font-bold text-xs select-none">
+                          ...
+                        </span>
+                      );
+                    }
+                    return null;
+                  })}
+                </div>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                  disabled={activePage === totalPages}
+                  className="h-8 px-3 text-[11px] font-extrabold text-slate-600 disabled:opacity-40"
+                  id="btn-next-page"
+                >
+                  Suivant
+                  <ChevronRight className="w-3.5 h-3.5 ml-1" />
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       </section>
     </div>

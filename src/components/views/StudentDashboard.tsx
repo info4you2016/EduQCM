@@ -31,13 +31,52 @@ export const StudentDashboard = ({ exams, results, onStartExam, user, modules, n
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedModuleId, setSelectedModuleId] = useState<number | null>(null);
   const [statusFilter, setStatusFilter] = useState<'all' | 'todo' | 'completed'>('all');
-  const [typeFilter, setTypeFilter] = useState<'all' | 'controle-continu' | 'fin-de-module'>('all');
+  const [typeFilter, setTypeFilter] = useState<'all' | 'controle-continu' | 'fin-de-module' | 'autre'>('all');
   const [sortBy, setSortBy] = useState<'createdAt' | 'title'>('createdAt');
   const [layoutMode, setLayoutMode] = useState<'grid' | 'list'>('grid');
   const [selectedResult, setSelectedResult] = useState<{ exam: Exam, result: Result } | null>(null);
 
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(6);
+
+  const studentNotifications = useMemo(() => {
+    return notifications.filter(notif => {
+      // Must be student-appropriate audience
+      const isTargetedToStudentRole = !notif.audienceRole || notif.audienceRole === 'all' || notif.audienceRole === 'students';
+      if (!isTargetedToStudentRole) return false;
+
+      const notifGroup = notif.groupId ? Number(notif.groupId) : null;
+      const notifFiliere = notif.filiereId ? Number(notif.filiereId) : null;
+      
+      const userGroup = user?.groupId ? Number(user.groupId) : null;
+      const userFiliere = user?.filiereId ? Number(user.filiereId) : null;
+
+      // Global if there are NO specific targets
+      const isGlobal = (!notifGroup || notifGroup === 0) && (!notifFiliere || notifFiliere === 0);
+      
+      const matchesGroup = notifGroup && notifGroup !== 0 && userGroup && userGroup !== 0 && notifGroup === userGroup;
+      const matchesFiliere = notifFiliere && notifFiliere !== 0 && userFiliere && userFiliere !== 0 && notifFiliere === userFiliere;
+
+      return isGlobal || matchesGroup || matchesFiliere;
+    });
+  }, [notifications, user?.groupId, user?.filiereId]);
+
+  const [notifPage, setNotifPage] = useState(1);
+  const [notifsPerPage, setNotifsPerPage] = useState(3);
+
+  const totalNotifPages = Math.ceil(studentNotifications.length / notifsPerPage);
+
+  const currentNotifications = useMemo(() => {
+    const startIndex = (notifPage - 1) * notifsPerPage;
+    return studentNotifications.slice(startIndex, startIndex + notifsPerPage);
+  }, [studentNotifications, notifPage, notifsPerPage]);
+
+  // Adjust current notification page if notifications count changes
+  React.useEffect(() => {
+    if (notifPage > totalNotifPages && totalNotifPages > 0) {
+      setNotifPage(totalNotifPages);
+    }
+  }, [studentNotifications.length, totalNotifPages, notifPage]);
 
   // Reset page when sorting/filtering/searching changes
   React.useEffect(() => {
@@ -577,12 +616,13 @@ export const StudentDashboard = ({ exams, results, onStartExam, user, modules, n
                 <div className="md:col-span-4">
                   <select 
                     value={typeFilter}
-                    onChange={(e) => setTypeFilter(e.target.value as 'all' | 'controle-continu' | 'fin-de-module')}
+                    onChange={(e) => setTypeFilter(e.target.value as 'all' | 'controle-continu' | 'fin-de-module' | 'autre')}
                     className="w-full px-3 py-2.5 bg-white border border-slate-200 focus:border-indigo-600 rounded-xl text-xs font-bold text-slate-600 outline-none transition-all cursor-pointer"
                   >
                     <option value="all">📝 Tous types (CC & EFM)</option>
                     <option value="controle-continu">✏️ Contrôles Continus (CC)</option>
                     <option value="fin-de-module">🎓 Examens Fin de Module (EFM)</option>
+                    <option value="autre">✨ Autres Évaluations (Libre)</option>
                   </select>
                 </div>
               </div>
@@ -702,9 +742,13 @@ export const StudentDashboard = ({ exams, results, onStartExam, user, modules, n
                             {exam.type && (
                               <span className={cn(
                                 "text-[9px] font-black px-2 py-0.5 rounded uppercase tracking-wide",
-                                exam.type === 'fin-de-module' ? "text-purple-600 bg-purple-50" : "text-blue-600 bg-blue-50"
+                                exam.type === 'fin-de-module' 
+                                  ? "text-purple-600 bg-purple-50" 
+                                  : exam.type === 'controle-continu'
+                                    ? "text-blue-600 bg-blue-50"
+                                    : "text-amber-600 bg-amber-50"
                               )}>
-                                {exam.type === 'fin-de-module' ? 'EFM' : 'CC'}
+                                {exam.type === 'fin-de-module' ? 'EFM' : exam.type === 'controle-continu' ? 'CC' : 'Autre'}
                               </span>
                             )}
                             <span className="text-[9px] font-bold text-slate-400">
@@ -802,9 +846,13 @@ export const StudentDashboard = ({ exams, results, onStartExam, user, modules, n
                             {exam.type && (
                               <span className={cn(
                                 "text-[10px] font-black flex items-center gap-1 uppercase tracking-widest bg-slate-50 px-2 py-1 rounded-lg",
-                                exam.type === 'fin-de-module' ? "text-purple-600 bg-purple-50" : "text-blue-600 bg-blue-50"
+                                exam.type === 'fin-de-module' 
+                                  ? "text-purple-600 bg-purple-50" 
+                                  : exam.type === 'controle-continu'
+                                    ? "text-blue-600 bg-blue-50"
+                                    : "text-amber-600 bg-amber-50"
                               )}>
-                                {exam.type === 'fin-de-module' ? 'EFM' : 'CC'}
+                                {exam.type === 'fin-de-module' ? 'EFM' : exam.type === 'controle-continu' ? 'CC' : 'Autre'}
                               </span>
                             )}
                           </div>
@@ -973,27 +1021,77 @@ export const StudentDashboard = ({ exams, results, onStartExam, user, modules, n
                 <h3 className="text-xl font-black text-slate-900 tracking-tight">Annonces de classe & Communiqués</h3>
               </div>
               <span className="text-[10px] font-black uppercase text-indigo-600 bg-indigo-50 px-3 py-1.5 rounded-xl">
-                {notifications.length} {notifications.length > 1 ? 'annonces' : 'annonce'}
+                {studentNotifications.length} {studentNotifications.length > 1 ? 'annonces' : 'annonce'}
               </span>
             </div>
-            {notifications.length === 0 ? (
+            {studentNotifications.length === 0 ? (
               <div className="p-8 text-center bg-slate-50/60 rounded-[2rem] border-2 border-dashed border-slate-100">
                 <p className="text-xs font-black text-slate-400 uppercase tracking-widest leading-none">Aucun communiqué officiel</p>
                 <p className="text-[10px] text-slate-400 mt-2">Votre enseignant n'a publié aucune annonce pour l'instant.</p>
               </div>
             ) : (
-              <div className="space-y-6">
-                {notifications.map((notif) => (
-                  <DetailedNotificationCard 
-                    key={notif.id} 
-                    notification={notif} 
-                    user={user} 
-                    groups={groups}
-                    filieres={filieres}
-                    onRefresh={onRefresh} 
-                  />
-                ))}
-              </div>
+              <>
+                <div className="space-y-6">
+                  {currentNotifications.map((notif) => (
+                    <DetailedNotificationCard 
+                      key={notif.id} 
+                      notification={notif} 
+                      user={user} 
+                      groups={groups}
+                      filieres={filieres}
+                      onRefresh={onRefresh} 
+                    />
+                  ))}
+                </div>
+
+                {/* Announcement Pagination Controls */}
+                {totalNotifPages > 1 && (
+                  <div className="p-4 bg-white border border-slate-100 rounded-[2rem] shadow-sm flex flex-col sm:flex-row items-center justify-between gap-4 mt-8">
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-4 w-full sm:w-auto">
+                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.15em] text-center sm:text-left">
+                        Affichage {studentNotifications.length > 0 ? (notifPage - 1) * notifsPerPage + 1 : 0} à {Math.min(notifPage * notifsPerPage, studentNotifications.length)} sur {studentNotifications.length} annonces
+                      </span>
+                      <select
+                        value={notifsPerPage}
+                        onChange={(e) => {
+                          setNotifsPerPage(Number(e.target.value));
+                          setNotifPage(1);
+                        }}
+                        className="text-[10px] font-black uppercase tracking-widest bg-slate-50 border-2 border-transparent focus:border-indigo-500/20 rounded-xl px-2.5 py-1.5 text-slate-500 focus:outline-none cursor-pointer hover:border-slate-300 transition-all w-full sm:w-auto text-center"
+                      >
+                        <option value={2}>2 par page</option>
+                        <option value={3}>3 par page</option>
+                        <option value={5}>5 par page</option>
+                        <option value={10}>10 par page</option>
+                      </select>
+                    </div>
+                    
+                    <div className="flex items-center justify-center gap-2 w-full sm:w-auto">
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        disabled={notifPage === 1}
+                        onClick={() => setNotifPage(prev => Math.max(1, prev - 1))}
+                        className="h-8 px-4 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all border-slate-200 text-slate-500 hover:text-indigo-600 bg-white"
+                      >
+                        Précédent
+                      </Button>
+                      <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest px-2 min-w-[100px] text-center">
+                        Page {notifPage} sur {totalNotifPages}
+                      </span>
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        disabled={notifPage === totalNotifPages}
+                        onClick={() => setNotifPage(prev => Math.min(totalNotifPages, prev + 1))}
+                        className="h-8 px-4 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all border-slate-200 text-slate-500 hover:text-indigo-600 bg-white"
+                      >
+                        Suivant
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </section>
         </div>

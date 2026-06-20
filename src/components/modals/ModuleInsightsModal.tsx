@@ -335,9 +335,11 @@ export const ModuleInsightsModal = ({
                           "px-2 py-0.5 text-[8px] font-black rounded uppercase tracking-wider",
                           exam.type === 'controle-continu' 
                             ? "bg-indigo-50 text-indigo-600 border border-indigo-100/50" 
-                            : "bg-purple-50 text-purple-600 border border-purple-100/50"
+                            : exam.type === 'fin-de-module'
+                              ? "bg-purple-50 text-purple-600 border border-purple-100/50"
+                              : "bg-amber-50 text-amber-600 border border-amber-100/50"
                         )}>
-                          {exam.type === 'controle-continu' ? 'Contrôle Continu' : 'Examen Fin de Module'}
+                          {exam.type === 'controle-continu' ? 'Contrôle Continu' : exam.type === 'fin-de-module' ? 'Examen Fin de Module' : 'Autre Évaluation'}
                         </span>
                         <h4 className="text-sm font-black text-slate-800 uppercase tracking-tight mt-1.5 leading-tight">{exam.title}</h4>
                         <span className="text-[10px] font-bold text-slate-400 mt-0.5 block">{exam.groupName || "Tous Groupes"}</span>

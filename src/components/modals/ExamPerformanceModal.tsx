@@ -48,7 +48,7 @@ export const ExamPerformanceModal = ({ exam, onClose, modules, filieres, groups,
 
     const groupId = exam.groupId || groups.find(g => g.name === exam.groupName)?.id;
     const group = groups.find(g => g.id === groupId);
-    const filiere = filieres.find(f => f.id === group?.filiereId || module.filiereId);
+    const filiere = filieres.find(f => f.id === (group?.filiereId || module.filiereId));
 
     const groupName = group?.name || exam.groupName || 'N/A';
     const filiereName = filiere ? `[${filiere.code}] ${filiere.name}` : 'N/A';

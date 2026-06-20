@@ -70,7 +70,7 @@ export interface Question {
   section?: string;
 }
 
-export type ExamType = 'controle-continu' | 'fin-de-module';
+export type ExamType = 'controle-continu' | 'fin-de-module' | 'autre';
 
 export interface Exam {
   id: number;
@@ -231,6 +231,7 @@ export interface OrganizationSettings {
   localAiEnabled?: boolean;
   localAiUrl?: string;
   localAiModel?: string;
+  institutions?: string[];
   updatedAt?: string;
 }
 
@@ -294,3 +295,47 @@ export interface ChatMessage {
   attachmentName?: string | null;
   attachmentType?: string | null;
 }
+
+export interface PracticalExamTask {
+  id: string;
+  title: string;
+  description: string;
+  points: number;
+  steps: string[];
+  solution?: string;
+}
+
+export interface PracticalExamEvaluationCriteria {
+  taskTitle: string;
+  criteriaName: string;
+  points: number;
+  guidelines: string;
+}
+
+export interface PracticalExamProvidedFile {
+  fileName: string;
+  fileType: 'xlsx' | 'docx' | 'txt' | 'sh' | 'json';
+  description: string;
+  contentStructure?: string;
+  rawContentText?: string;
+  excelSheets?: {
+    sheetName: string;
+    headers: string[];
+    rows: any[][];
+  }[];
+}
+
+export interface PracticalExamSheet {
+  title: string;
+  vendor: string;
+  certificationName: string;
+  durationMinutes: number;
+  scenario: string;
+  requirements: string[];
+  tasks: PracticalExamTask[];
+  providedFiles?: PracticalExamProvidedFile[];
+  evaluationCriteria: PracticalExamEvaluationCriteria[];
+  generalTipsForTeacher: string;
+  officialSolutionSummary?: string;
+}
+

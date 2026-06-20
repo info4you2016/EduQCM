@@ -241,7 +241,14 @@ export const ResultDetailsModal = ({ exam, result, user, modules, onClose }: Res
                   )}
 
                   <div className="space-y-2">
-                    <p className="text-[9px] font-black uppercase text-slate-400 tracking-wider">Votre Réponse</p>
+                    <p className="text-[9px] font-black uppercase text-slate-400 tracking-wider flex items-center gap-1.5">
+                      <span>Votre Réponse</span>
+                      {q.type === 'short-answer' && (
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-indigo-50 border border-indigo-100 text-[8px] text-indigo-600 font-extrabold uppercase tracking-wide">
+                          <Sparkles className="w-2.5 h-2.5 animate-pulse" /> Évalué par l'IA
+                        </span>
+                      )}
+                    </p>
                     <div className="p-3 sm:p-4 bg-white/80 rounded-xl sm:rounded-2xl border border-slate-100 text-xs sm:text-sm font-bold text-indigo-600 break-words">
                       {q.type === 'multiple-choice' || q.type === 'true-false' ? (
                         <span dangerouslySetInnerHTML={{ __html: q.options?.[studentAns as number]?.text || 'Pas de réponse' }} />
@@ -255,9 +262,9 @@ export const ResultDetailsModal = ({ exam, result, user, modules, onClose }: Res
                     </div>
                   </div>
 
-                  {!isCorrect && q.type !== 'short-answer' && (
+                  {!isCorrect && (
                     <div className="space-y-2">
-                      <p className="text-[9px] font-black uppercase text-slate-400 tracking-wider">Réponse Correcte</p>
+                      <p className="text-[9px] font-black uppercase text-slate-400 tracking-wider">Réponse Correcte attendue</p>
                       <div className="p-3 sm:p-4 bg-emerald-50/50 rounded-xl sm:rounded-2xl border border-emerald-100 text-xs sm:text-sm font-bold text-emerald-700 break-words">
                         {q.type === 'multiple-choice' || q.type === 'true-false' ? (
                           <span dangerouslySetInnerHTML={{ __html: q.options?.find(o => o.isCorrect)?.text || '' }} />
@@ -291,7 +298,7 @@ export const ResultDetailsModal = ({ exam, result, user, modules, onClose }: Res
                 exam={exam} 
                 result={result} 
                 user={user} 
-                moduleName={modules.find(m => m.id === exam.moduleId)?.name} 
+                moduleName={modules.find(m => Number(m.id) === Number(exam.moduleId))?.name} 
                 isPreview={true} 
               />
             </div>
@@ -308,7 +315,7 @@ export const ResultDetailsModal = ({ exam, result, user, modules, onClose }: Res
               exam={exam} 
               result={result} 
               user={user} 
-              moduleName={modules.find(m => m.id === exam.moduleId)?.name} 
+              moduleName={modules.find(m => Number(m.id) === Number(exam.moduleId))?.name} 
               isPreview={false}
             />
           </div>,
@@ -321,7 +328,7 @@ export const ResultDetailsModal = ({ exam, result, user, modules, onClose }: Res
           </Button>
           <button 
             onClick={() => {
-              downloadAttestationPDF(exam, result, user, modules.find(m => m.id === exam.moduleId)?.name);
+              downloadAttestationPDF(exam, result, user, modules.find(m => Number(m.id) === Number(exam.moduleId))?.name);
             }}
             className="flex-1 py-3.5 rounded-xl border-2 border-indigo-600 bg-indigo-600 hover:bg-indigo-700 text-white font-black uppercase text-xs tracking-widest transition-all flex items-center justify-center gap-2 active:scale-98 shadow-sm cursor-pointer"
           >

@@ -64,7 +64,7 @@ async function triggerPDFGeneration(element: HTMLElement, exam: Exam, result: Re
   clone.style.height = '210mm';
   clone.style.position = 'static';
   clone.style.margin = '0';
-  clone.style.padding = '12mm 15mm';
+  clone.style.padding = '15mm 15mm';
   clone.style.backgroundColor = '#ffffff';
   clone.style.color = '#000000';
   clone.style.boxSizing = 'border-box';
@@ -161,7 +161,7 @@ function triggerIframePrint(element: Element) {
           @media print {
             @page {
               size: A4 landscape;
-              margin: 4mm 8mm;
+              margin: 8mm 10mm;
             }
             body {
               margin: 0;
@@ -180,7 +180,7 @@ function triggerIframePrint(element: Element) {
               box-sizing: border-box !important;
               margin: 0 auto !important;
               background-color: #ffffff !important;
-              padding: 10mm 12mm !important;
+              padding: 12mm 15mm !important;
               border: 15px double #1e1b4b !important;
             }
           }
@@ -198,7 +198,7 @@ function triggerIframePrint(element: Element) {
             box-sizing: border-box !important;
             margin: 5px auto !important;
             background-color: #ffffff !important;
-            padding: 10mm 12mm !important;
+            padding: 12mm 15mm !important;
             border: 15px double #1e1b4b !important;
           }
         </style>
@@ -279,21 +279,20 @@ export const AttestationTemplate = ({ exam, result, user, moduleName, isPreview 
   const verificationCode = generateVerificationCode();
 
   // If in preview mode, we present it with full Tailwind layout suited for a modal.
-  // Otherwise, it adopts print-only landscape dimensions and standard times/serif typography.
+  // Otherwise, it adopts print-only portrait dimensions and standard times/serif typography.
   return (
     <div 
       id={isPreview ? "attestation-preview-container" : "attestation-export-container"}
-      className={`${isPreview ? 'w-full max-w-3xl border-double border-[10px] p-2 relative flex flex-col' : 'pv-export-content  attestation-export-print attestation-export-content border-double'} mx-auto bg-white text-slate-900`}
+      className={`${isPreview ? 'w-full max-w-4xl border-double border-[10px] p-2 relative flex flex-col' : 'attestation-export-print attestation-export-content border-double'} mx-auto bg-white text-slate-900`}
       style={isPreview ? {
         borderColor: '#1e1b4b',
         fontFamily: "'Inter', sans-serif",
         position: 'relative',
         aspectRatio: '1.414 / 1',
-        minHeight: '340px',
       } : {
         width: '297mm',
         height: '210mm',
-        padding: '12mm 15mm',
+        padding: '12mm 12mm',
         backgroundColor: '#ffffff',
         color: '#000000',
         fontFamily: "'Inter', sans-serif",
@@ -317,7 +316,7 @@ export const AttestationTemplate = ({ exam, result, user, moduleName, isPreview 
               width: 297mm !important;
               height: 210mm !important;
               background: #ffffff !important;
-              padding: 12mm 15mm !important;
+              padding: 12mm 12mm !important;
               border: 15px double #1e1b4b !important;
               position: absolute !important;
               top: 0 !important;
@@ -344,19 +343,19 @@ export const AttestationTemplate = ({ exam, result, user, moduleName, isPreview 
         )}
 
         {/* Header Block */}
-        <div className="grid grid-cols-3 gap-2 items-center border-b border-indigo-900/10 pb-4 min-h-[105px] select-none">
+        <div className="grid grid-cols-3 gap-2 items-center border-b pb-4 min-h-[105px] select-none" style={{ borderColor: 'rgba(30, 27, 75, 0.1)' }}>
           {/* Left Column: Organization French */}
           <div className="text-left space-y-0.5 leading-tight flex flex-col justify-center">
-            <p className="text-[8px] font-bold tracking-wider text-indigo-950 uppercase">
+            <p className="text-[8px] font-bold tracking-wider uppercase" style={{ color: '#1e1b4b' }}>
               {settings?.regionName || 'ROYAUME DU MAROC'}
             </p>
-            <p className="text-[8px] font-black text-indigo-900 uppercase">
+            <p className="text-[8px] font-black uppercase" style={{ color: '#312e81' }}>
               {settings?.orgNameFrench || 'Office de la Formation Professionnelle et de la promotion du travail'}
             </p>
-            <p className="text-[7.5px] font-medium text-slate-500">
+            <p className="text-[7.5px] font-medium" style={{ color: '#64748b' }}>
               {settings?.regionalDirection || 'Direction Régionale De BM-KH'}
             </p>
-            <p className="text-[7.5px] font-bold text-slate-850">
+            <p className="text-[7.5px] font-bold" style={{ color: '#1e293b' }}>
               {settings?.institutionName || 'ISTA AL HASSANIA'}
             </p>
           </div>
@@ -372,27 +371,27 @@ export const AttestationTemplate = ({ exam, result, user, moduleName, isPreview 
                 onError={() => setImgError(true)}
               />
             ) : (
-              <div className="w-12 h-12 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-900 border border-indigo-150">
+              <div className="w-12 h-12 rounded-full bg-indigo-50 flex items-center justify-center border" style={{ backgroundColor: '#f5f3ff', borderColor: '#ddd6fe', color: '#312e81' }}>
                 <GraduationCap className="w-6 h-6" />
               </div>
             )}
-            <p className="text-[7.5px] text-amber-600 font-bold uppercase tracking-wider leading-none mt-1">
+            <p className="text-[7.5px] font-bold uppercase tracking-wider leading-none mt-1" style={{ color: '#d97706' }}>
               Année : {settings?.academicYear || '2024/2025'}
             </p>
           </div>
 
           {/* Right Column: Organization Arabic */}
           <div className="text-right space-y-0.5 leading-tight flex flex-col justify-center items-stretch w-full" style={{ direction: 'rtl', textAlign: 'right' }}>
-            <p className="text-[9px] font-bold text-indigo-950 w-full" style={{ textAlign: 'right' }}>
+            <p className="text-[9px] font-bold w-full" style={{ color: '#1e1b4b', textAlign: 'right' }}>
               المملكة المغربية
             </p>
-            <p className="text-[8.5px] font-black text-indigo-900 w-full" style={{ textAlign: 'right' }}>
+            <p className="text-[8.5px] font-black w-full" style={{ color: '#312e81', textAlign: 'right' }}>
               {settings?.orgNameArabic || 'مكتب التكوين المهني وإنعاش الشغل'}
             </p>
-            <p className="text-[7.5px] font-medium text-slate-500 w-full" style={{ textAlign: 'right' }}>
+            <p className="text-[7.5px] font-medium w-full" style={{ color: '#64748b', textAlign: 'right' }}>
               {settings?.regionalDirection ? 'المديرية الجهوية' : ''}
             </p>
-            <p className="text-[7.5px] font-bold text-slate-800 w-full" style={{ textAlign: 'right' }}>
+            <p className="text-[7.5px] font-bold w-full" style={{ color: '#1e293b', textAlign: 'right' }}>
               {settings?.orgSubName || 'DRBMKH'}
             </p>
           </div>
@@ -400,110 +399,113 @@ export const AttestationTemplate = ({ exam, result, user, moduleName, isPreview 
 
         {/* Certificate Title */}
         <div className="text-center my-4">
-          <h2 className="text-2xl md:text-3xl font-black text-indigo-950 uppercase tracking-wide">
+          <h2 className="text-2xl md:text-3xl font-black uppercase tracking-wide" style={{ color: '#1e1b4b' }}>
             {isPassed ? "Attestation de Réussite de Module" : "Attestation de Passage de Module"}
           </h2>
-          <p className="text-[10px] md:text-xs text-amber-600 font-serif italic mt-1">
+          <p className="text-[10px] md:text-xs font-serif italic mt-1" style={{ color: '#d97706' }}>
             {isPassed ? "Certificatif d'acquisition de compétences académiques" : "Attestation nominative de participation pour l'évaluation"}
           </p>
         </div>
 
         {/* Main Body */}
-        <div className="text-center space-y-4 max-w-4xl mx-auto my-3">
-          <p className="text-xs md:text-sm text-slate-500 font-serif">
+        <div className="text-center space-y-3 max-w-4xl mx-auto my-2">
+          <p className="text-xs md:text-sm font-serif" style={{ color: '#475569' }}>
             Le Secrétariat Académique et le corps enseignant de la filière certifient que :
           </p>
           
-          <div className="space-y-1">
-            <p className="text-xl md:text-2xl font-black text-indigo-950 font-sans uppercase tracking-tight">
+          <div className="space-y-0.5">
+            <p className="text-xl md:text-2xl font-black font-sans uppercase tracking-tight" style={{ color: '#1e1b4b' }}>
               {result?.studentName || user?.displayName || 'Stagiaire'}
             </p>
-            <p className="text-[10px] md:text-xs text-slate-400 uppercase tracking-widest">
-              Identifiant Stagiaire : <strong className="text-slate-700 font-bold">{user?.registrationNumber || user?.email || result?.studentEmail || 'N/A'}</strong>
-              {(result?.groupName || user?.groupName) && <span> • Groupe : <strong className="text-slate-700 font-bold">{result?.groupName || user?.groupName}</strong></span>}
-              {(result?.filiere || user?.filiere) && <span> • Filière : <strong className="text-slate-700 font-bold">{result?.filiere || user?.filiere}</strong></span>}
+            <p className="text-[10px] md:text-xs uppercase tracking-widest" style={{ color: '#64748b' }}>
+              Identifiant Stagiaire : <strong style={{ color: '#334155', fontWeight: 'bold' }}>{user?.registrationNumber || user?.email || result?.studentEmail || 'N/A'}</strong>
+              {(result?.groupName || user?.groupName) && <span> • Groupe : <strong style={{ color: '#334155', fontWeight: 'bold' }}>{result?.groupName || user?.groupName}</strong></span>}
+              {(result?.filiere || user?.filiere) && <span> • Filière : <strong style={{ color: '#334155', fontWeight: 'bold' }}>{result?.filiere || user?.filiere}</strong></span>}
             </p>
           </div>
 
-          <p className="text-xs md:text-sm text-slate-500 font-serif leading-relaxed px-6">
+          <p className="text-xs md:text-sm font-serif leading-relaxed px-6" style={{ color: '#475569' }}>
             A validé avec succès l'évaluation académique pour le module d'enseignement :
           </p>
 
           <div 
-            className="rounded-2xl p-6 inline-block w-full max-w-2xl text-center shadow-lg my-3 border-2" 
+            className="rounded-2xl p-4 py-5 block mx-auto w-full max-w-2xl text-center shadow-md my-2 border-2" 
             style={{ 
               backgroundColor: '#f8fafc', 
               borderColor: '#d97706', // Rich amber color for high-fidelity highlighted border
               borderStyle: 'solid',
             }}
           >
-            <p className="text-[11px] md:text-xs text-amber-600 font-extrabold uppercase tracking-[0.25em] mb-2" style={{ color: '#d97706' }}>
-              MODULE D'ENSEIGNEMENT : {moduleName || exam?.moduleName || "Spécialisé"}
+            <p className="text-[10px] md:text-xs font-extrabold uppercase tracking-[0.2em] mb-1" style={{ color: '#d97706', marginRight: '-0.2em' }}>
+              MODULE D'ENSEIGNEMENT
             </p>
-            <div className="w-28 h-0.5 bg-amber-500 mx-auto mb-3" style={{ backgroundColor: '#f1f5f9' }} />
-            <h3 className="text-xl md:text-2xl text-indigo-950 uppercase tracking-wider leading-tight px-6 font-sans" style={{ fontWeight: 900, color: '#1e1b4b' }}>
-              {exam.title}
+            <h3 className="text-base md:text-lg uppercase font-sans tracking-wide leading-tight px-4 mb-2" style={{ fontWeight: 900, color: '#1e1b4b' }}>
+              {moduleName || exam?.moduleName || "Spécialisé"}
             </h3>
-            <div className="mt-4 text-[10px] text-slate-400 font-black tracking-widest uppercase" style={{ color: '#94a3b8' }}>
+            <div className="w-24 h-0.5 mx-auto mb-2" style={{ backgroundColor: '#d97706' }} />
+            <p className="text-xs md:text-sm font-medium italic" style={{ color: '#334155' }}>
+              {exam?.title || "Examen Académique"}
+            </p>
+            <div className="mt-3 text-[9px] font-black tracking-widest uppercase" style={{ color: '#94a3b8' }}>
               • Épreuve de Certification Officielle •
             </div>
           </div>
 
-          <p className="text-xs md:text-sm text-slate-600 font-serif leading-relaxed px-6">
+          <p className="text-xs md:text-sm font-serif leading-relaxed px-6" style={{ color: '#475569' }}>
             {isPassed ? (
-              <span>
+              <span className="inline-block align-middle">
                 Ayant validé les connaissances théoriques et pratiques nécessaires de ce module avec un score de{' '}
-                <strong className="text-indigo-900 font-black font-sans">{percentage}%</strong> ({result?.score || 0}/{result?.totalPoints || 0} points) avec la mention :{' '}
-                <strong className="text-emerald-700 font-black uppercase font-sans tracking-wide bg-emerald-50 px-2.5 py-0.5 rounded-md border border-emerald-100">{appreciation}</strong>.
+                <strong className="font-black font-sans" style={{ color: '#1e1b4b' }}>{percentage}%</strong> ({result?.score || 0}/{result?.totalPoints || 0} points) avec la mention :{' '}
+                <strong className="inline-flex items-center justify-center align-middle uppercase font-sans tracking-wide bg-emerald-50 px-2 py-0.5 rounded-md border text-[10px] md:text-xs font-black" style={{ color: '#047857', borderColor: 'rgba(16, 185, 129, 0.3)', verticalAlign: 'middle', marginTop: '-2px' }}>{appreciation}</strong>.
               </span>
             ) : (
               <span>
                 A complété l'épreuve d'évaluation correspondante avec un score de{' '}
-                <strong className="text-indigo-900 font-black font-sans">{percentage}%</strong> ({result?.score || 0}/{result?.totalPoints || 0} points).
+                <strong className="font-black font-sans" style={{ color: '#1e1b4b' }}>{percentage}%</strong> ({result?.score || 0}/{result?.totalPoints || 0} points).
               </span>
             )}
           </p>
         </div>
 
         {/* Bottom Block: Date / Verification / Signatures */}
-        <div className="grid grid-cols-3 gap-4 items-end mt-4 pt-4 border-t border-slate-100 text-left">
+        <div className="grid grid-cols-3 gap-4 items-end mt-2 pt-3 border-t border-slate-100 text-left" style={{ borderColor: '#f1f5f9' }}>
           
           {/* Verification Left */}
           <div className="space-y-1">
             <div className="flex items-center gap-1">
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-              <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest leading-none">Code d'Authenticité</span>
+              <span className="text-[8px] font-black uppercase tracking-widest leading-none" style={{ color: '#94a3b8' }}>Code d'Authenticité</span>
             </div>
-            <p className="font-mono text-[9px] text-slate-700 font-bold">{verificationCode}</p>
-            <p className="text-[7px] text-slate-400 max-w-[170px] leading-snug">
+            <p className="font-mono text-[9px] font-bold" style={{ color: '#334155' }}>{verificationCode}</p>
+            <p className="text-[7px] max-w-[170px] leading-snug" style={{ color: '#94a3b8' }}>
               Cet enregistrement est certifié infalsifiable et stocké de manière sécurisée dans le portail d'évaluation.
             </p>
           </div>
 
           {/* Golden Seal Center */}
           <div className="flex flex-col items-center justify-center text-center">
-            <div className="relative w-14 h-14 flex items-center justify-center bg-amber-50 text-amber-500 border border-amber-300 rounded-full shadow-inner shadow-amber-200">
+            <div className="relative w-12 h-12 flex items-center justify-center bg-amber-50 text-amber-500 border border-amber-300 rounded-full shadow-inner shadow-amber-200">
               {/* Star details around */}
               <div className="absolute inset-1 border border-dashed border-amber-400 rounded-full pointer-events-none" />
-              <Award className="w-7 h-7 text-amber-500 animate-pulse" />
+              <Award className="w-6 h-6 text-amber-500 animate-pulse" />
             </div>
-            <p className="text-[8px] font-bold text-amber-700 uppercase tracking-widest mt-1.5 leading-none">CERTIFIÉ CONFORME</p>
-            <p className="text-[7px] text-slate-400 mt-1">Fait le {formattedDate}</p>
+            <p className="text-[8px] font-bold text-amber-700 uppercase tracking-widest mt-1 leading-none" style={{ color: '#b45309' }}>CERTIFIÉ CONFORME</p>
+            <p className="text-[7px] mt-1" style={{ color: '#94a3b8' }}>Fait le {formattedDate}</p>
           </div>
 
           {/* Signatures Right */}
           <div className="text-right space-y-1 pr-2">
-            <p className="text-[9px] font-bold text-slate-400 uppercase">Le Directoire d'Évaluation</p>
-            <div className="h-10 flex items-center justify-end relative">
+            <p className="text-[9px] font-bold uppercase" style={{ color: '#94a3b8' }}>Le Directoire d'Évaluation</p>
+            <div className="h-8 flex items-center justify-end relative">
               {/* Simulated Signature Line */}
-              <div className="absolute right-0 bottom-1 w-24 h-px bg-slate-300" />
+              <div className="absolute right-0 bottom-1 w-24 h-px bg-slate-200" style={{ backgroundColor: '#e2e8f0' }} />
               
               {/* Stamp Circle */}
-              <div className="absolute right-8 w-11 h-11 rounded-full border border-dashed border-indigo-400/40 opacity-70 flex items-center justify-center text-center rotate-12">
-                <span className="text-[6px] font-serif text-indigo-400 uppercase leading-[7px]">SOCIETATE<br/>SIGNATURE</span>
+              <div className="absolute right-8 w-11 h-11 rounded-full border border-dashed border-indigo-400/40 opacity-70 flex items-center justify-center text-center rotate-12" style={{ borderColor: 'rgba(129, 140, 248, 0.4)' }}>
+                <span className="text-[6px] font-serif uppercase leading-[7px]" style={{ color: '#818cf8' }}>SOCIETATE<br/>SIGNATURE</span>
               </div>
             </div>
-            <p className="text-[8px] font-black text-indigo-950 uppercase tracking-wider">Prof. Administrateur</p>
+            <p className="text-[8px] font-black uppercase tracking-wider" style={{ color: '#1e1b4b' }}>Prof. Administrateur</p>
           </div>
 
         </div>

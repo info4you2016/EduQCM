@@ -18,6 +18,12 @@ export const ResultsExportTemplate = React.forwardRef<HTMLDivElement, ResultsExp
     const orgSubName = settings?.orgSubName || 'DRBMKH';
     const academicYear = settings?.academicYear || '2024/2025';
 
+    const sortedResults = [...results].sort((a, b) => {
+      const nameA = (a.studentName || '').trim().toLowerCase();
+      const nameB = (b.studentName || '').trim().toLowerCase();
+      return nameA.localeCompare(nameB, 'fr');
+    });
+
     const replaceVariables = (text: string) => {
       if (!text) return '';
       return text
@@ -26,7 +32,7 @@ export const ResultsExportTemplate = React.forwardRef<HTMLDivElement, ResultsExp
         .replace(/{{DATE}}/g, exam.scheduledAt ? new Date(exam.scheduledAt).toLocaleDateString('fr-FR') : new Date().toLocaleDateString('fr-FR'))
         .replace(/{{GROUPE}}/g, groupName || '')
         .replace(/{{DUREE}}/g, formatDuration(exam.durationMinutes))
-        .replace(/{{TYPE}}/g, exam.type === 'controle-continu' ? 'CC' : 'EFM')
+        .replace(/{{TYPE}}/g, exam.type === 'controle-continu' ? 'CC' : exam.type === 'fin-de-module' ? 'EFM' : 'Autre')
         .replace(/{{FILIERE}}/g, filiereName || '')
         .replace(/{{NIVEAU}}/g, filiereLevel || '')
         .replace(/{{ETABLISSEMENT}}/g, settings?.institutionName || '')
@@ -205,7 +211,7 @@ export const ResultsExportTemplate = React.forwardRef<HTMLDivElement, ResultsExp
           {/* Results List */}
           <div style={{ marginBottom: '40px' }}>
             <h2 style={{ fontSize: '14px', fontWeight: 'bold', borderBottom: '1px solid #000', paddingBottom: '5px', marginBottom: '15px' }}>
-              Liste des Participants ({results.length} étudiants)
+              Liste des Participants ({sortedResults.length} étudiants)
             </h2>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
               <thead>
@@ -217,7 +223,7 @@ export const ResultsExportTemplate = React.forwardRef<HTMLDivElement, ResultsExp
                 </tr>
               </thead>
               <tbody>
-                {results.map((res, i) => {
+                {sortedResults.map((res, i) => {
                   const nameAr = isArabic(res.studentName);
                   return (
                     <tr key={res.id}>
@@ -243,7 +249,7 @@ export const ResultsExportTemplate = React.forwardRef<HTMLDivElement, ResultsExp
             DÉTAIL DES RÉPONSES PAR ÉTUDIANT
           </h2>
           
-          {results.map((res, sIdx) => {
+          {sortedResults.map((res, sIdx) => {
             const nameAr = isArabic(res.studentName);
             return (
               <div 

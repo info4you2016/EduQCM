@@ -66,7 +66,7 @@ export const exportExamToWord = async (
       .replace(/{{DATE}}/g, exam.scheduledAt ? new Date(exam.scheduledAt).toLocaleDateString('fr-FR') : new Date().toLocaleDateString('fr-FR'))
       .replace(/{{GROUPE}}/g, groupName || '')
       .replace(/{{DUREE}}/g, formatDuration(exam.durationMinutes))
-      .replace(/{{TYPE}}/g, exam.type === 'controle-continu' ? 'CC' : 'EFM')
+      .replace(/{{TYPE}}/g, exam.type === 'controle-continu' ? 'CC' : exam.type === 'fin-de-module' ? 'EFM' : 'Autre')
       .replace(/{{FILIERE}}/g, filiereName || '')
       .replace(/{{NIVEAU}}/g, filiereLevel || '')
       .replace(/{{ETABLISSEMENT}}/g, settings?.institutionName || 'INSTITUTION')
@@ -747,9 +747,23 @@ export const exportExamToWord = async (
                     ];
 
                     groupedQuestions[type].forEach(({ q, originalIdx }) => {
-                      const ans = String(q.correctAnswer).toLowerCase();
-                      const isTrue = ans === 'true' || ans === 'vrai';
-                      const isFalse = ans === 'false' || ans === 'faux';
+                      const correctOpt = q.options?.find(o => o.isCorrect);
+                      let isTrue = false;
+                      let isFalse = false;
+
+                      if (correctOpt) {
+                        const normText = String(correctOpt.text).toLowerCase().trim();
+                        isTrue = normText === 'vrai' || normText === 'true' || normText === 'v';
+                        isFalse = normText === 'faux' || normText === 'false' || normText === 'f';
+                      } else if (q.correctAnswer !== undefined && q.correctAnswer !== null) {
+                        const ansStr = String(q.correctAnswer).toLowerCase().trim();
+                        isTrue = ansStr === 'true' || ansStr === 'vrai' || ansStr === 'v';
+                        isFalse = ansStr === 'false' || ansStr === 'faux' || ansStr === 'f';
+                      } else if (q.correctOptionIndex !== undefined && q.correctOptionIndex !== null) {
+                        isTrue = q.correctOptionIndex === 0;
+                        isFalse = q.correctOptionIndex === 1;
+                      }
+
                       const rtl = isArabic(q.text);
 
                       tableRows.push(
@@ -877,12 +891,22 @@ export const exportExamToWord = async (
               rows: [
                 new TableRow({
                   children: exam.questions.map((_, i) => new TableCell({
-                    children: [new Paragraph({ alignment: AlignmentType.CENTER, text: `Q${i + 1}`, children: [new TextRun({ bold: true })] })]
+                    children: [
+                      new Paragraph({
+                        alignment: AlignmentType.CENTER,
+                        children: [new TextRun({ text: `Q${i + 1}`, bold: true })]
+                      })
+                    ]
                   }))
                 }),
                 new TableRow({
                   children: exam.questions.map((q) => new TableCell({
-                    children: [new Paragraph({ alignment: AlignmentType.CENTER, text: getShortAnswer(q), children: [new TextRun({ bold: true, color: "059669" })] })]
+                    children: [
+                      new Paragraph({
+                        alignment: AlignmentType.CENTER,
+                        children: [new TextRun({ text: getShortAnswer(q), bold: true, color: "059669" })]
+                      })
+                    ]
                   }))
                 })
               ]
@@ -1702,7 +1726,19 @@ function getShortAnswer(q: Question): string {
         return idx !== undefined && idx !== -1 ? String.fromCharCode(97 + idx) : "?";
     }
     if (q.type === 'true-false') {
-        return q.correctAnswer === 'true' ? 'V' : 'F';
+        const correctOpt = q.options?.find(o => o.isCorrect);
+        if (correctOpt) {
+            const normText = String(correctOpt.text).toLowerCase().trim();
+            if (normText === 'vrai' || normText === 'true' || normText === 'v') return 'V';
+            if (normText === 'faux' || normText === 'false' || normText === 'f') return 'F';
+        }
+        const ans = String(q.correctAnswer || '').toLowerCase().trim();
+        if (ans === 'true' || ans === 'vrai' || ans === 'v') return 'V';
+        if (ans === 'false' || ans === 'faux' || ans === 'f') return 'F';
+        if (q.correctOptionIndex !== undefined && q.correctOptionIndex !== null) {
+            return q.correctOptionIndex === 0 ? 'V' : 'F';
+        }
+        return '-';
     }
     if (q.type === 'short-answer') return 'SA';
     if (q.type === 'fill-in-the-blanks') return 'TEXT';

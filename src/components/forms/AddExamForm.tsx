@@ -21,6 +21,7 @@ import { ImportHelp } from '../sections/ImportHelp';
 import { Modal } from '../ui/Modal';
 import { AIQuestionGeneratorModal } from '../modals/AIQuestionGeneratorModal';
 import { toast } from 'react-hot-toast';
+import { useConfirm } from '../ui/ConfirmDialog';
 
 interface AddExamFormProps {
   modules: Module[];
@@ -30,9 +31,19 @@ interface AddExamFormProps {
 }
 
 export const AddExamForm = ({ modules, onComplete, user, initialData }: AddExamFormProps) => {
+  const confirm = useConfirm();
   const [title, setTitle] = useState(initialData?.title || '');
   const [moduleId, setModuleId] = useState<string>(() => initialData?.moduleId?.toString() || modules[0]?.id?.toString() || '');
   const [examType, setExamType] = useState<ExamType>(initialData?.type || 'controle-continu');
+  const [customMaxPoints, setCustomMaxPoints] = useState<number>(() => {
+    if (initialData?.questions) {
+      if (initialData.type === 'autre') {
+        const total = initialData.questions.reduce((sum, q) => sum + (q.points || 0), 0);
+        return total > 0 ? total : 20;
+      }
+    }
+    return 20;
+  });
   const [durationHours, setDurationHours] = useState(initialData ? Math.floor((initialData.durationMinutes || 0) / 60).toString() : '0');
   const [durationMinutes, setDurationMinutes] = useState(initialData ? ((initialData.durationMinutes || 0) % 60).toString() : '30');
   const [shuffleQuestions, setShuffleQuestions] = useState(initialData?.shuffleQuestions || false);
@@ -134,12 +145,19 @@ export const AddExamForm = ({ modules, onComplete, user, initialData }: AddExamF
     }
   ];
 
-  const applyTemplate = (templateId: string) => {
+  const applyTemplate = async (templateId: string) => {
     const template = EXAM_TEMPLATES.find(t => t.id === templateId);
     if (!template) return;
     
-    if (questions.some(q => q.text) && !confirm("L'application d'un modèle remplacera vos questions actuelles. Continuer ?")) {
-      return;
+    if (questions.some(q => q.text)) {
+      const ok = await confirm({
+        title: "Appliquer le modèle",
+        message: "L'application d'un modèle remplacera vos questions actuelles. Continuer ?",
+        confirmLabel: "Continuer",
+        cancelLabel: "Annuler",
+        variant: "warning"
+      });
+      if (!ok) return;
     }
     
     const newQs = template.generate();
@@ -188,25 +206,34 @@ export const AddExamForm = ({ modules, onComplete, user, initialData }: AddExamF
     if (!initialData) {
       const draft = localStorage.getItem(`exam_draft_${user.id}`);
       if (draft) {
-        try {
-          const parsed = JSON.parse(draft);
-          if (confirm("Un brouillon non enregistré a été trouvé. Voulez-vous le restaurer ?")) {
-            setTitle(parsed.title || '');
-            setModuleId(parsed.moduleId || '');
-            setExamType(parsed.examType || 'controle-continu');
-            setQuestions(parsed.questions || []);
-            setDurationHours(parsed.durationHours || '0');
-            setDurationMinutes(parsed.durationMinutes || '30');
-            setShuffleQuestions(parsed.shuffleQuestions || false);
-            setDisableCopyPaste(parsed.disableCopyPaste || false);
-            setForceFullscreen(parsed.forceFullscreen || false);
-            setDetectTabExits(parsed.detectTabExits || false);
-          } else {
-            localStorage.removeItem(`exam_draft_${user.id}`);
+        (async () => {
+          try {
+            const parsed = JSON.parse(draft);
+            const ok = await confirm({
+              title: "Restaurer le brouillon",
+              message: "Un brouillon non enregistré a été trouvé. Voulez-vous le restaurer ?",
+              confirmLabel: "Restaurer",
+              cancelLabel: "Ignorer",
+              variant: "primary"
+            });
+            if (ok) {
+              setTitle(parsed.title || '');
+              setModuleId(parsed.moduleId || '');
+              setExamType(parsed.examType || 'controle-continu');
+              setQuestions(parsed.questions || []);
+              setDurationHours(parsed.durationHours || '0');
+              setDurationMinutes(parsed.durationMinutes || '30');
+              setShuffleQuestions(parsed.shuffleQuestions || false);
+              setDisableCopyPaste(parsed.disableCopyPaste || false);
+              setForceFullscreen(parsed.forceFullscreen || false);
+              setDetectTabExits(parsed.detectTabExits || false);
+            } else {
+              localStorage.removeItem(`exam_draft_${user.id}`);
+            }
+          } catch (e) {
+            console.error("Failed to load draft", e);
           }
-        } catch (e) {
-          console.error("Failed to load draft", e);
-        }
+        })();
       }
     }
   }, [user.id, initialData]);
@@ -364,24 +391,16 @@ export const AddExamForm = ({ modules, onComplete, user, initialData }: AddExamF
           ? q.correctOrder.map(Number) 
           : (typeof q.correctOrder === 'string' ? q.correctOrder.split('|').map(Number) : rawOpts.map((_, i) => i));
 
-        // Create objects to track original position
-        const items = rawOpts.map((text, index) => ({ text, index }));
-        
-        // Shuffle the items for the database/editor
-        for (let i = items.length - 1; i > 0; i--) {
-          const j = Math.floor(Math.random() * (i + 1));
-          [items[i], items[j]] = [items[j], items[i]];
-        }
-
-        // New correctOrder must point to the new indices of original items in the order they should appear
-        const newCorrectOrder = correctOrderInput.map(origIdx => 
-          items.findIndex(item => item.index === origIdx)
-        );
+        // Keep the imported order exactly as specified in the options list.
+        // We do not shuffle them here because the editor displays options in corrected/logical order ("Elements dans le BON ORDRE")
+        // Automatic shuffling for students is done at exam runtime in the student view if shuffleOptions is enabled.
+        const sanitizedCorrectOrder = correctOrderInput.filter(idx => idx >= 0 && idx < rawOpts.length);
+        const finalCorrectOrder = sanitizedCorrectOrder.length === rawOpts.length ? sanitizedCorrectOrder : rawOpts.map((_, i) => i);
 
         const question: Question = {
           ...base,
-          options: items.map(item => ({ text: item.text })),
-          correctOrder: newCorrectOrder
+          options: rawOpts.map(text => ({ text })),
+          correctOrder: finalCorrectOrder
         };
 
         if (question.options?.length === 0) errors.push('Éléments à ordonner manquants');
@@ -395,30 +414,28 @@ export const AddExamForm = ({ modules, onComplete, user, initialData }: AddExamF
           ? q.correctMatches.map(Number) 
           : (typeof q.correctMatches === 'string' ? q.correctMatches.split('|').map(Number) : rawOpts.map((_, i) => i));
 
-        // Create objects to track original position of match options
-        const matchItems = rawMatchOpts.map((text, index) => ({ text, index }));
-        
-        // Shuffle the match items
-        for (let i = matchItems.length - 1; i > 0; i--) {
-          const j = Math.floor(Math.random() * (i + 1));
-          [matchItems[i], matchItems[j]] = [matchItems[j], matchItems[i]];
-        }
-
-        // New correctMatches must point to the new indices of right-side options
-        const newCorrectMatches = correctMatchesInput.map(origRightIdx => 
-          matchItems.findIndex(item => item.index === origRightIdx)
-        );
+        // Keep left-side options and right-side matchmaking options aligned and in their logical imported order.
+        // We do not shuffle here since the editor directly aligns left and right pairs at matching indices for editing.
+        const sanitizedCorrectMatches = correctMatchesInput.filter(idx => idx >= 0 && idx < rawMatchOpts.length);
+        const finalCorrectMatches = sanitizedCorrectMatches.length === rawOpts.length ? sanitizedCorrectMatches : rawOpts.map((_, i) => i);
 
         const question: Question = {
           ...base,
           options: rawOpts.map(text => ({ text })),
-          matchOptions: matchItems.map(item => item.text),
-          correctMatches: newCorrectMatches
+          matchOptions: rawMatchOpts,
+          correctMatches: finalCorrectMatches
         };
 
         if (question.options?.length === 0) errors.push('Options de gauche manquantes');
         if (question.matchOptions?.length === 0) errors.push('Options de droite manquantes');
         if (question.options?.length !== question.matchOptions?.length) errors.push('Le nombre d\'options de gauche et de droite doit être identique');
+        return { question, isValid: errors.length === 0, errors };
+      }
+      case 'practical': {
+        const question: Question = {
+          ...base
+        };
+        // A practical evaluation doesn't have auto-grading properties, just prompt/text and points
         return { question, isValid: errors.length === 0, errors };
       }
       default:
@@ -449,16 +466,49 @@ export const AddExamForm = ({ modules, onComplete, user, initialData }: AddExamF
       try {
         if (file.name.endsWith('.json')) {
           const imported = JSON.parse(content);
-          if (Array.isArray(imported)) {
-            const validated = imported.map(validateAndNormalize);
-            setImportProgress(100);
-            setTimeout(() => {
-              setPendingImport(validated);
-              setImportProgress(null);
-            }, 300);
+          let questionsArray: any[] = [];
+          
+          if (imported && typeof imported === 'object' && !Array.isArray(imported)) {
+            // Structured full-exam format
+            if (imported.title) setTitle(imported.title);
+            if (imported.moduleId !== undefined && imported.moduleId !== null) {
+              setModuleId(imported.moduleId.toString());
+            } else if (imported.module?.id !== undefined && imported.module?.id !== null) {
+              setModuleId(imported.module.id.toString());
+            }
+            if (imported.examType) {
+              setExamType(imported.examType as ExamType);
+            } else if (imported.type) {
+              if (Array.isArray(imported.questions)) {
+                setExamType(imported.type as ExamType);
+              }
+            }
+            if (imported.durationMinutes !== undefined && imported.durationMinutes !== null) {
+              const dur = Number(imported.durationMinutes);
+              if (!isNaN(dur)) {
+                setDurationHours(Math.floor(dur / 60).toString());
+                setDurationMinutes((dur % 60).toString());
+              }
+            }
+            if (imported.shuffleQuestions !== undefined) setShuffleQuestions(Boolean(imported.shuffleQuestions));
+            if (imported.disableCopyPaste !== undefined) setDisableCopyPaste(Boolean(imported.disableCopyPaste));
+            if (imported.forceFullscreen !== undefined) setForceFullscreen(Boolean(imported.forceFullscreen));
+            if (imported.detectTabExits !== undefined) setDetectTabExits(Boolean(imported.detectTabExits));
+
+            questionsArray = Array.isArray(imported.questions) ? imported.questions : [];
+            toast.success("Métadonnées de l'examen extraites avec succès !");
+          } else if (Array.isArray(imported)) {
+            questionsArray = imported;
           } else {
-            throw new Error("Le format JSON doit être un tableau de questions.");
+            throw new Error("Le format JSON doit être soit un tableau de questions, soit un objet d'examen valide.");
           }
+
+          const validated = questionsArray.map(validateAndNormalize);
+          setImportProgress(100);
+          setTimeout(() => {
+            setPendingImport(validated);
+            setImportProgress(null);
+          }, 300);
         } else if (file.name.endsWith('.csv')) {
           Papa.parse(content, {
             header: true,
@@ -469,7 +519,47 @@ export const AddExamForm = ({ modules, onComplete, user, initialData }: AddExamF
                 setImportProgress(null);
                 return;
               }
-              const validated = results.data.map(validateAndNormalize);
+              const rows = results.data as any[];
+              if (rows.length > 0) {
+                const first = rows[0];
+                const impTitle = first.exam_title || first.examTitle;
+                const impModuleId = first.exam_moduleId || first.examModuleId || first.moduleId;
+                const impType = first.exam_type || first.exam_examType || first.examType;
+                const impDuration = first.exam_durationMinutes || first.examDurationMinutes || first.durationMinutes;
+
+                const getBool = (val: any) => {
+                  if (val === undefined || val === null || val === '') return undefined;
+                  return val === 'true' || val === '1' || val === true;
+                };
+
+                const impShuffle = getBool(first.exam_shuffleQuestions || first.examShuffleQuestions || first.shuffleQuestions);
+                const impDisableCopyPaste = getBool(first.exam_disableCopyPaste || first.examDisableCopyPaste || first.disableCopyPaste);
+                const impForceFullscreen = getBool(first.exam_forceFullscreen || first.examForceFullscreen || first.forceFullscreen);
+                const impDetectTabExits = getBool(first.exam_detectTabExits || first.examDetectTabExits || first.detectTabExits);
+
+                if (impTitle) setTitle(impTitle);
+                if (impModuleId !== undefined && impModuleId !== null && impModuleId !== '') {
+                  setModuleId(impModuleId.toString());
+                }
+                if (impType) setExamType(impType as ExamType);
+                if (impDuration !== undefined && impDuration !== null && impDuration !== '') {
+                  const dur = Number(impDuration);
+                  if (!isNaN(dur)) {
+                    setDurationHours(Math.floor(dur / 60).toString());
+                    setDurationMinutes((dur % 60).toString());
+                  }
+                }
+                if (impShuffle !== undefined) setShuffleQuestions(impShuffle);
+                if (impDisableCopyPaste !== undefined) setDisableCopyPaste(impDisableCopyPaste);
+                if (impForceFullscreen !== undefined) setForceFullscreen(impForceFullscreen);
+                if (impDetectTabExits !== undefined) setDetectTabExits(impDetectTabExits);
+
+                if (impTitle || impType || impDuration) {
+                  toast.success("Métadonnées de l'examen extraites du CSV !");
+                }
+              }
+
+              const validated = rows.map(validateAndNormalize);
               setImportProgress(100);
               setTimeout(() => {
                 setPendingImport(validated);
@@ -560,7 +650,7 @@ export const AddExamForm = ({ modules, onComplete, user, initialData }: AddExamF
   };
 
   const exportToJSON = () => {
-    const data = questions.map(q => {
+    const questionsData = questions.map(q => {
       const nq = normalizeQuestion(q);
       const exportQ: any = {
         type: nq.type,
@@ -585,14 +675,35 @@ export const AddExamForm = ({ modules, onComplete, user, initialData }: AddExamF
       }
       return exportQ;
     });
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    saveAs(blob, `questions_${stripHtml(title).replace(/\s+/g, '_') || 'export'}.json`);
+
+    const fullExamData = {
+      title,
+      moduleId: Number(moduleId) || null,
+      examType,
+      durationMinutes: (parseInt(durationHours) || 0) * 60 + (parseInt(durationMinutes) || 0),
+      shuffleQuestions,
+      disableCopyPaste,
+      forceFullscreen,
+      detectTabExits,
+      questions: questionsData
+    };
+
+    const blob = new Blob([JSON.stringify(fullExamData, null, 2)], { type: 'application/json' });
+    saveAs(blob, `examen_${stripHtml(title).replace(/\s+/g, '_') || 'export'}.json`);
   };
 
   const exportToCSV = () => {
     const data = questions.map(q => {
       const nq = normalizeQuestion(q);
       const row: any = {
+        exam_title: title,
+        exam_moduleId: moduleId,
+        exam_type: examType,
+        exam_durationMinutes: (parseInt(durationHours) || 0) * 60 + (parseInt(durationMinutes) || 0),
+        exam_shuffleQuestions: shuffleQuestions,
+        exam_disableCopyPaste: disableCopyPaste,
+        exam_forceFullscreen: forceFullscreen,
+        exam_detectTabExits: detectTabExits,
         type: nq.type,
         text: stripHtml(nq.text),
         points: nq.points,
@@ -617,7 +728,7 @@ export const AddExamForm = ({ modules, onComplete, user, initialData }: AddExamF
     });
     const csv = Papa.unparse(data);
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    saveAs(blob, `questions_${stripHtml(title).replace(/\s+/g, '_') || 'export'}.csv`);
+    saveAs(blob, `examen_${stripHtml(title).replace(/\s+/g, '_') || 'export'}.csv`);
   };
 
   const updateQuestion = (id: string, fieldOrUpdates: keyof Question | Partial<Question>, value?: any) => {
@@ -638,12 +749,12 @@ export const AddExamForm = ({ modules, onComplete, user, initialData }: AddExamF
   );
 
   const totalPoints = questions.reduce((sum, q) => sum + (q.points || 0), 0);
-  const maxPoints = examType === 'controle-continu' ? 20 : 40;
+  const maxPoints = examType === 'controle-continu' ? 20 : (examType === 'fin-de-module' ? 40 : customMaxPoints);
   const isPointsValid = totalPoints === maxPoints;
 
   const distributePoints = () => {
     if (questions.length === 0) return;
-    const maxPoints = examType === 'controle-continu' ? 20 : 40;
+    const maxPoints = examType === 'controle-continu' ? 20 : (examType === 'fin-de-module' ? 40 : customMaxPoints);
     const basePoints = Math.floor(maxPoints / questions.length);
     const extraPoints = maxPoints % questions.length;
     
@@ -680,9 +791,9 @@ export const AddExamForm = ({ modules, onComplete, user, initialData }: AddExamF
     }
 
     const totalPoints = questions.reduce((sum, q) => sum + (q.points || 0), 0);
-    const maxPoints = examType === 'controle-continu' ? 20 : 40;
+    const maxPoints = examType === 'controle-continu' ? 20 : (examType === 'fin-de-module' ? 40 : customMaxPoints);
     if (totalPoints !== maxPoints) {
-      toast.error(`Le total des points doit être exactement de ${maxPoints} pour un ${examType === 'controle-continu' ? 'Contrôle Continu' : 'Examen de Fin de Module'}. Actuellement: ${totalPoints}`);
+      toast.error(`Le total des points doit être exactement de ${maxPoints} pour un ${examType === 'controle-continu' ? 'Contrôle Continu' : examType === 'fin-de-module' ? 'Examen de Fin de Module' : 'Examen personnalisé'}. Actuellement: ${totalPoints}`);
       return;
     }
     
@@ -871,8 +982,23 @@ export const AddExamForm = ({ modules, onComplete, user, initialData }: AddExamF
               >
                 <option value="controle-continu">Contrôle Continu (Barème: 20)</option>
                 <option value="fin-de-module">Examen de Fin de Module (Barème: 40)</option>
+                <option value="autre">Autre (Barème personnalisé)</option>
               </select>
             </div>
+            {examType === 'autre' && (
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">Barème de l'examen (Total des points)</label>
+                <input 
+                  type="number" 
+                  value={customMaxPoints} 
+                  onChange={(e) => setCustomMaxPoints(Math.max(1, parseInt(e.target.value) || 0))}
+                  min="1"
+                  className="w-full px-4 py-3 bg-slate-50 border-2 border-transparent focus:border-indigo-500/20 focus:bg-white rounded-2xl text-sm font-bold transition-all outline-none"
+                  placeholder="Ex: 50, 100..."
+                  required
+                />
+              </div>
+            )}
             <div className="space-y-1.5 flex flex-col justify-end">
               <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">Durée</label>
               <div className="flex gap-2">
@@ -1064,8 +1190,15 @@ export const AddExamForm = ({ modules, onComplete, user, initialData }: AddExamF
                     type="button" 
                     variant="ghost" 
                     size="sm" 
-                    onClick={() => {
-                      if (confirm("Êtes-vous sûr de vouloir supprimer TOUTES les questions ?")) {
+                    onClick={async () => {
+                      const ok = await confirm({
+                        title: "Supprimer tout",
+                        message: "Êtes-vous sûr de vouloir supprimer TOUTES les questions ?",
+                        confirmLabel: "Supprimer tout",
+                        cancelLabel: "Annuler",
+                        variant: "danger"
+                      });
+                      if (ok) {
                         setQuestions([{ 
                           id: Math.random().toString(36).substring(2, 11), 
                           type: 'multiple-choice',
@@ -1110,6 +1243,7 @@ export const AddExamForm = ({ modules, onComplete, user, initialData }: AddExamF
                     size="sm" 
                     onClick={() => fileInputRef.current?.click()} 
                     className={cn("gap-2 rounded-lg", importProgress !== null && "opacity-50 pointer-events-none")}
+                    title="Importer un examen complet ou des questions (.json, .csv)"
                   >
                     <Upload className="w-4 h-4" />
                     {importProgress !== null ? 'Importation...' : 'Import'}
@@ -1124,6 +1258,32 @@ export const AddExamForm = ({ modules, onComplete, user, initialData }: AddExamF
                     title="Aide sur le format d'importation"
                   >
                     <Info className="w-4 h-4" />
+                  </Button>
+                </div>
+
+                <div className="flex bg-white p-1 rounded-xl border border-slate-200">
+                  <Button 
+                    type="button" 
+                    variant="ghost" 
+                    size="sm" 
+                    onClick={exportToJSON} 
+                    className="gap-2 rounded-lg text-slate-600 hover:text-indigo-600 font-extrabold"
+                    title="Exporter l'examen complet au format JSON"
+                  >
+                    <FileCode className="w-4 h-4 text-emerald-600" />
+                    Exp. JSON
+                  </Button>
+                  <div className="w-px h-4 bg-slate-200 self-center mx-1" />
+                  <Button 
+                    type="button" 
+                    variant="ghost" 
+                    size="sm" 
+                    onClick={exportToCSV} 
+                    className="gap-2 rounded-lg text-slate-600 hover:text-indigo-600 font-extrabold"
+                    title="Exporter l'examen complet au format CSV"
+                  >
+                    <FileText className="w-4 h-4 text-emerald-600" />
+                    Exp. CSV
                   </Button>
                 </div>
                 <input type="file" ref={fileInputRef} onChange={handleImport} accept=".csv,.json" className="hidden" />
