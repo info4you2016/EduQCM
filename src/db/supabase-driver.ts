@@ -29,10 +29,21 @@ export class SupabaseSyncDriver {
     
     // Identify credentials grouped by pair
     let viteSupabaseUrl = (process.env.VITE_SUPABASE_URL || "").trim();
-    let viteSupabaseKey = (process.env.VITE_SUPABASE_PUBLISHABLE_KEY || "").trim();
+    let viteSupabaseKey = (
+      process.env.VITE_SUPABASE_PUBLISHABLE_KEY || 
+      process.env.VITE_SUPABASE_ANON_KEY || 
+      process.env.VITE_SUPABASE_KEY || 
+      ""
+    ).trim();
 
     let stdSupabaseUrl = (process.env.SUPABASE_URL || "").trim();
-    let stdSupabaseKey = (process.env.SUPABASE_PUBLISHABLE_KEY || "").trim();
+    let stdSupabaseKey = (
+      process.env.SUPABASE_PUBLISHABLE_KEY || 
+      process.env.SUPABASE_ANON_KEY || 
+      process.env.SUPABASE_KEY || 
+      process.env.SUPABASE_SERVICE_ROLE_KEY || 
+      ""
+    ).trim();
 
     // Also parse from DATABASE_URL if it contains a REST URL or key
     let dbUrlSupabaseUrl = "";
@@ -40,7 +51,7 @@ export class SupabaseSyncDriver {
     const cleanDbUrl = dbUrl.split(/\s+/)[0] || "";
     if (cleanDbUrl.startsWith("http://") || cleanDbUrl.startsWith("https://")) {
       dbUrlSupabaseUrl = cleanDbUrl;
-      const keyMatch = dbUrl.match(/(?:VITE_)?SUPABASE_PUBLISHABLE_KEY=([^\s]+)/);
+      const keyMatch = dbUrl.match(/(?:VITE_)?SUPABASE_(?:PUBLISHABLE_KEY|ANON_KEY|KEY|SERVICE_ROLE_KEY)=([^\s]+)/i);
       if (keyMatch) {
         dbUrlSupabaseKey = keyMatch[1];
       }

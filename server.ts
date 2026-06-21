@@ -940,8 +940,8 @@ async function startServer() {
         return res.status(401).json({ error: "User no longer exists" });
       }
 
-      // Check for dual concurrent session for students
-      if (user.role === 'student' && user.activeSessionId && decoded.sessionId !== user.activeSessionId) {
+      // Check for dual concurrent session for all accounts
+      if (user.activeSessionId && decoded.sessionId !== user.activeSessionId) {
         res.clearCookie("token", { httpOnly: true, secure: true, sameSite: 'none' });
         return res.status(401).json({ error: "DUAL_SESSION" });
       }
@@ -1668,11 +1668,8 @@ Rend un commentaire d'évaluation en français structuré sous format JSON : {"t
       const result = stmt.run(email, hashedPassword, displayName, role, groupName || null, filiere || null, groupId || null, filiereId || null);
       
       const userId = Number(result.lastInsertRowid);
-      let sessionId = null;
-      if (role === 'student') {
-        sessionId = Math.random().toString(36).substring(2) + Date.now().toString(36);
-        db.prepare("UPDATE users SET activeSessionId = ? WHERE id = ?").run(sessionId, userId);
-      }
+      const sessionId = Math.random().toString(36).substring(2) + Date.now().toString(36);
+      db.prepare("UPDATE users SET activeSessionId = ? WHERE id = ?").run(sessionId, userId);
       
       const user = { id: userId, email, displayName, role, groupName, filiere, groupId, filiereId, sessionId };
       const token = jwt.sign(user, JWT_SECRET);
@@ -1703,11 +1700,8 @@ Rend un commentaire d'évaluation en français structuré sous format JSON : {"t
     
     const { password: _, groupNameResolved, filiereNameResolved, ...userWithoutPassword } = user;
     
-    let sessionId = null;
-    if (user.role === 'student') {
-      sessionId = Math.random().toString(36).substring(2) + Date.now().toString(36);
-      db.prepare("UPDATE users SET activeSessionId = ? WHERE id = ?").run(sessionId, user.id);
-    }
+    const sessionId = Math.random().toString(36).substring(2) + Date.now().toString(36);
+    db.prepare("UPDATE users SET activeSessionId = ? WHERE id = ?").run(sessionId, user.id);
 
     const userData = { 
       ...userWithoutPassword, 
@@ -1833,8 +1827,8 @@ Rend un commentaire d'évaluation en français structuré sous format JSON : {"t
         return res.json({ user: null });
       }
 
-      // Check for dual session for student
-      if (user.role === 'student' && user.activeSessionId && decoded.sessionId !== user.activeSessionId) {
+      // Check for dual session for all accounts
+      if (user.activeSessionId && decoded.sessionId !== user.activeSessionId) {
         res.clearCookie("token", { httpOnly: true, secure: true, sameSite: "none" });
         return res.status(401).json({ error: "DUAL_SESSION" });
       }
@@ -2489,20 +2483,31 @@ Rend un commentaire d'évaluation en français structuré sous format JSON : {"t
 
   app.get("/api/results", authenticate, (req: any, res) => {
     const isTeacher = req.user.role === 'teacher' || req.user.role === 'admin';
-    const cacheKey = req.user.role === 'admin' ? "results:list:admin" : (isTeacher ? "results:list:teacher" : `results:list:student:${req.user.id}`);
+    const cacheKey = req.user.role === 'admin' 
+      ? "results:list:admin" 
+      : (req.user.role === 'teacher' ? `results:list:teacher:${req.user.id}` : `results:list:student:${req.user.id}`);
     const cachedData = cacheManager.get(cacheKey);
     if (cachedData) {
       return res.json(cachedData);
     }
 
     let results;
-    if (isTeacher) {
+    if (req.user.role === 'admin') {
       results = db.prepare(`
         SELECT r.*, u.displayName as studentName, u.email as studentEmail, u.groupName, u.filiere
         FROM results r 
         JOIN users u ON r.studentId = u.id 
         ORDER BY r.completedAt DESC
       `).all();
+    } else if (req.user.role === 'teacher') {
+      results = db.prepare(`
+        SELECT r.*, u.displayName as studentName, u.email as studentEmail, u.groupName, u.filiere
+        FROM results r 
+        JOIN users u ON r.studentId = u.id 
+        JOIN exams e ON r.examId = e.id
+        WHERE e.teacherId = ?
+        ORDER BY r.completedAt DESC
+      `).all(req.user.id);
     } else {
       results = db.prepare(`
         SELECT r.*, u.displayName as studentName, u.email as studentEmail, u.groupName, u.filiere
@@ -2526,10 +2531,18 @@ Rend un commentaire d'évaluation en français structuré sous format JSON : {"t
     if (req.user.role === 'student') return res.status(403).json({ error: "Forbidden" });
     const { id } = req.params;
     
-    const cacheKey = `results:exam:${id}`;
+    const cacheKey = req.user.role === 'admin'
+      ? `results:exam:${id}:admin`
+      : `results:exam:${id}:teacher:${req.user.id}`;
     const cachedData = cacheManager.get(cacheKey);
     if (cachedData) {
       return res.json(cachedData);
+    }
+
+    // Is the teacher allowed to see this exam's results?
+    const exam = db.prepare("SELECT teacherId FROM exams WHERE id = ?").get(id) as any;
+    if (req.user.role === 'teacher' && exam && exam.teacherId !== req.user.id) {
+      return res.status(403).json({ error: "Interdit - Vous ne pouvez pas voir les résultats d'un examen créé par un autre enseignant." });
     }
 
     const results = db.prepare(`
@@ -2553,13 +2566,28 @@ Rend un commentaire d'évaluation en français structuré sous format JSON : {"t
   app.get("/api/students/count", authenticate, (req: any, res) => {
     if (req.user.role === 'student') return res.status(403).json({ error: "Forbidden" });
     
-    const cacheKey = "users:student_count";
+    const cacheKey = req.user.role === 'admin' 
+      ? "users:student_count:admin" 
+      : `users:student_count:teacher:${req.user.id}`;
     const cachedCount = cacheManager.get(cacheKey);
     if (cachedCount !== null) {
       return res.json({ count: cachedCount });
     }
 
-    const count = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'student'").get() as any;
+    let count;
+    if (req.user.role === 'admin') {
+      count = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'student'").get() as any;
+    } else {
+      count = db.prepare(`
+        SELECT COUNT(DISTINCT u.id) as count 
+        FROM users u 
+        WHERE u.role = 'student' AND (
+          u.groupId IN (SELECT groupId FROM exams WHERE teacherId = ?) OR 
+          u.id IN (SELECT studentId FROM results r JOIN exams e ON r.examId = e.id WHERE e.teacherId = ?)
+        )
+      `).get(req.user.id, req.user.id) as any;
+    }
+    
     cacheManager.set(cacheKey, count.count, 300);
     res.json({ count: count.count });
   });
@@ -2569,19 +2597,43 @@ Rend un commentaire d'évaluation en français structuré sous format JSON : {"t
       return res.status(403).json({ error: "Forbidden" });
     }
 
-    const cacheKey = "results:dashboard_stats";
+    const cacheKey = req.user.role === 'admin' 
+      ? "results:dashboard_stats:admin" 
+      : `results:dashboard_stats:teacher:${req.user.id}`;
     const cachedStats = cacheManager.get(cacheKey);
     if (cachedStats) {
       return res.json(cachedStats);
     }
 
     try {
-      const studentCountRow = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'student'").get() as any;
-      const studentCount = studentCountRow ? studentCountRow.count : 0;
+      let studentCount = 0;
+      let resultRows: any[] = [];
 
-      const resultRows = db.prepare("SELECT score, totalPoints FROM results").all() as any[];
+      if (req.user.role === 'admin') {
+        const studentCountRow = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'student'").get() as any;
+        studentCount = studentCountRow ? studentCountRow.count : 0;
+        resultRows = db.prepare("SELECT score, totalPoints FROM results").all() as any[];
+      } else {
+        // Teacher-specific data
+        const studentCountRow = db.prepare(`
+          SELECT COUNT(DISTINCT u.id) as count 
+          FROM users u 
+          WHERE u.role = 'student' AND (
+            u.groupId IN (SELECT groupId FROM exams WHERE teacherId = ?) OR 
+            u.id IN (SELECT studentId FROM results r JOIN exams e ON r.examId = e.id WHERE e.teacherId = ?)
+          )
+        `).get(req.user.id, req.user.id) as any;
+        studentCount = studentCountRow ? studentCountRow.count : 0;
+
+        resultRows = db.prepare(`
+          SELECT r.score, r.totalPoints 
+          FROM results r
+          JOIN exams e ON r.examId = e.id
+          WHERE e.teacherId = ?
+        `).all(req.user.id) as any[];
+      }
+
       const totalResults = resultRows.length;
-      
       let avg = 0;
       let successCount = 0;
       
@@ -3345,13 +3397,32 @@ Instructions pour le feedback :
     if (req.user.role === 'student') return res.status(403).json({ error: "Forbidden" });
     const { id } = req.params;
     
-    const cacheKey = `groups:students:${id}`;
+    const cacheKey = req.user.role === 'admin' 
+      ? `groups:students:${id}:admin` 
+      : `groups:students:${id}:teacher:${req.user.id}`;
     const cachedData = cacheManager.get(cacheKey);
     if (cachedData) {
       return res.json(cachedData);
     }
 
-    const students = db.prepare("SELECT id, email, displayName, createdAt FROM users WHERE groupId = ? AND role = 'student' ORDER BY displayName ASC").all(id);
+    let students;
+    if (req.user.role === 'admin') {
+      students = db.prepare("SELECT id, email, displayName, createdAt FROM users WHERE groupId = ? AND role = 'student' ORDER BY displayName ASC").all(id);
+    } else {
+      // Check if teacher has created any exams for this group
+      const hasAccess = db.prepare(`
+        SELECT 1 
+        FROM exams 
+        WHERE teacherId = ? AND groupId = ?
+        LIMIT 1
+      `).get(req.user.id, id);
+
+      if (!hasAccess) {
+        students = [];
+      } else {
+        students = db.prepare("SELECT id, email, displayName, createdAt FROM users WHERE groupId = ? AND role = 'student' ORDER BY displayName ASC").all(id);
+      }
+    }
     cacheManager.set(cacheKey, students, 300);
     res.json(students);
   });
@@ -4863,21 +4934,40 @@ Instructions pour le feedback :
       return res.status(403).json({ error: "Forbidden" });
     }
     
-    const cacheKey = "users:admin_list";
+    const cacheKey = req.user.role === 'admin' 
+      ? "users:admin_list:admin" 
+      : `users:admin_list:teacher:${req.user.id}`;
     const cachedData = cacheManager.get(cacheKey);
     if (cachedData) {
       return res.json(cachedData);
     }
     
     try {
-      const users = db.prepare(`
-        SELECT u.id, u.email, u.displayName, u.role, u.groupName, u.filiere, u.groupId, u.filiereId, u.registrationNumber, u.createdAt,
-               g.name as groupNameResolved, f.name as filiereNameResolved
-        FROM users u
-        LEFT JOIN groups g ON u.groupId = g.id
-        LEFT JOIN filieres f ON u.filiereId = f.id
-        ORDER BY u.role DESC, u.displayName ASC
-      `).all();
+      let users;
+      if (req.user.role === 'admin') {
+        users = db.prepare(`
+          SELECT u.id, u.email, u.displayName, u.role, u.groupName, u.filiere, u.groupId, u.filiereId, u.registrationNumber, u.createdAt,
+                 g.name as groupNameResolved, f.name as filiereNameResolved
+          FROM users u
+          LEFT JOIN groups g ON u.groupId = g.id
+          LEFT JOIN filieres f ON u.filiereId = f.id
+          ORDER BY u.role DESC, u.displayName ASC
+        `).all();
+      } else {
+        // Teacher sees only themselves & students enrolled in the exams they created
+        users = db.prepare(`
+          SELECT u.id, u.email, u.displayName, u.role, u.groupName, u.filiere, u.groupId, u.filiereId, u.registrationNumber, u.createdAt,
+                 g.name as groupNameResolved, f.name as filiereNameResolved
+          FROM users u
+          LEFT JOIN groups g ON u.groupId = g.id
+          LEFT JOIN filieres f ON u.filiereId = f.id
+          WHERE u.id = ? OR (u.role = 'student' AND (
+            u.groupId IN (SELECT groupId FROM exams WHERE teacherId = ?) OR 
+            u.id IN (SELECT r.studentId FROM results r JOIN exams e ON r.examId = e.id WHERE e.teacherId = ?)
+          ))
+          ORDER BY u.role DESC, u.displayName ASC
+        `).all(req.user.id, req.user.id, req.user.id);
+      }
       cacheManager.set(cacheKey, users, 300);
       res.json(users);
     } catch (err: any) {
@@ -4920,6 +5010,22 @@ Instructions pour le feedback :
     const { id } = req.params;
     const { email, displayName, role, password, groupId, filiereId, registrationNumber } = req.body;
 
+    if (req.user.role === 'teacher') {
+      // Check if target user is self OR a student of exams created by the teacher
+      const isAllowed = db.prepare(`
+        SELECT 1 FROM users WHERE id = ? AND (
+          id = ? OR (role = 'student' AND (
+            groupId IN (SELECT groupId FROM exams WHERE teacherId = ?) OR
+            id IN (SELECT studentId FROM results r JOIN exams e ON r.examId = e.id WHERE e.teacherId = ?)
+          ))
+        )
+      `).get(id, id, req.user.id, req.user.id);
+
+      if (!isAllowed) {
+        return res.status(403).json({ error: "Interdit - Vous ne pouvez modifier que vos propres étudiants." });
+      }
+    }
+
     try {
       let hashedPassword: string | null = null;
       if (password) {
@@ -4953,6 +5059,20 @@ Instructions pour le feedback :
     const { id } = req.params;
     if (Number(id) === req.user.id) {
       return res.status(400).json({ error: "You cannot delete your own account" });
+    }
+
+    if (req.user.role === 'teacher') {
+      // Check if target user is a student of exams created by the teacher
+      const isAllowed = db.prepare(`
+        SELECT 1 FROM users WHERE id = ? AND role = 'student' AND (
+          groupId IN (SELECT groupId FROM exams WHERE teacherId = ?) OR
+          id IN (SELECT studentId FROM results r JOIN exams e ON r.examId = e.id WHERE e.teacherId = ?)
+        )
+      `).get(id, req.user.id, req.user.id);
+
+      if (!isAllowed) {
+        return res.status(403).json({ error: "Interdit - Vous ne pouvez supprimer que vos propres étudiants." });
+      }
     }
 
     try {
