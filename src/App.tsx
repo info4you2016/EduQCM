@@ -35,6 +35,7 @@ import { Modal } from './components/ui/Modal';
 import { AddNotificationForm } from './components/forms/AddNotificationForm';
 import { Toaster } from 'react-hot-toast';
 import { useAppStore } from './store/useAppStore';
+import { Analytics } from '@vercel/analytics/react';
 
 export default function App() {
   const {
@@ -597,6 +598,7 @@ export default function App() {
           </div>
         </Modal>
       )}
+      <Analytics />
     </div>
   );
 }
